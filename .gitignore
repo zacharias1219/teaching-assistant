@@ -1,4 +1,5 @@
-# Environment variables
+# Configuration files
+config.toml
 .env
 .env.local
 .env.*.local

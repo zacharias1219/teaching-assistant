@@ -11,7 +11,7 @@ import math
 import pytesseract
 import os
 from datetime import datetime
-from dotenv import load_dotenv
+import toml
 
 st.set_page_config(page_title="Start Grading", layout="wide")
 
@@ -326,13 +326,12 @@ st.info("This version uses a multi-step, 'Divide & Conquer' process for maximum 
 
 st.info("🔍 **GPT-4o OCR Enabled:** This app now uses GPT-4o's built-in OCR capabilities to extract text from images. No additional software installation required!")
 
-# Load environment variables
-load_dotenv()
-
-# --- API Key and Client Initialization ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    st.error("🚨 OPENAI_API_KEY not found! Please add your OpenAI API key to the .env file.")
+# Load configuration from TOML file
+try:
+    config = toml.load("config.toml")
+    OPENAI_API_KEY = config["openai"]["api_key"]
+except (FileNotFoundError, KeyError):
+    st.error("🚨 config.toml file not found or missing OpenAI API key! Please create config.toml with your OpenAI API key.")
     st.stop()
 
 
