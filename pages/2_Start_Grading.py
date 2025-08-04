@@ -326,12 +326,37 @@ st.info("This version uses a multi-step, 'Divide & Conquer' process for maximum 
 
 st.info("🔍 **GPT-4o OCR Enabled:** This app now uses GPT-4o's built-in OCR capabilities to extract text from images. No additional software installation required!")
 
-# Load configuration from TOML file
+# Load OpenAI API key from Streamlit secrets (for deployment) or local config
 try:
-    config = toml.load("config.toml")
-    OPENAI_API_KEY = config["openai"]["api_key"]
-except (FileNotFoundError, KeyError):
-    st.error("🚨 config.toml file not found or missing OpenAI API key! Please create config.toml with your OpenAI API key.")
+    # First try Streamlit secrets (for deployment)
+    if hasattr(st, 'secrets') and st.secrets:
+        OPENAI_API_KEY = st.secrets["openai"]["api_key"]
+    else:
+        # Fallback to local config files for development
+        config_paths = [
+            "config.toml",
+            "../config.toml",
+            ".streamlit/secrets.toml",
+            os.path.join(os.path.dirname(__file__), "..", "config.toml"),
+            os.path.join(os.getcwd(), "config.toml")
+        ]
+        
+        config = None
+        for path in config_paths:
+            try:
+                config = toml.load(path)
+                break
+            except FileNotFoundError:
+                continue
+        
+        if config is None:
+            st.error(f"🚨 No configuration found! Please set up Streamlit secrets or create config.toml")
+            st.stop()
+        
+        OPENAI_API_KEY = config["openai"]["api_key"]
+        
+except (KeyError, Exception) as e:
+    st.error(f"🚨 Error loading API key: {e}")
     st.stop()
 
 
