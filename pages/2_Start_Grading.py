@@ -12,6 +12,9 @@ import pytesseract
 import os
 from datetime import datetime
 import toml
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 st.set_page_config(page_title="Start Grading", layout="wide")
 
@@ -312,7 +315,8 @@ Return only the converted text content, no explanations."""
                         label="📥 Download This Report",
                         data=file_content,
                         file_name=selected_report,
-                        mime="application/json"
+                        mime="application/json",
+                        key=f"sidebar_download_{selected_report}"
                     )
                 except Exception as e:
                     st.error(f"Error loading report: {e}")
@@ -395,6 +399,226 @@ def convert_pdf_to_images(file):
         st.error(f"Error converting PDF to images: {e}")
         return []
 
+def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test_id, student_id):
+    """Regenerate OCR for a specific question using custom prompt"""
+    try:
+        # Check if API key is available
+        if not OPENAI_API_KEY:
+            return None, "OpenAI API key not found"
+        
+        # Validate inputs
+        if not answer_images:
+            return None, "No answer images provided"
+        # Find images that contain this question
+        relevant_images = []
+        for answer in answer_images:
+            if answer.get('extracted_text'):
+                if f"{question_num}." in answer['extracted_text'] or f"{question_num})" in answer['extracted_text']:
+                    relevant_images.append(answer)
+        
+        if not relevant_images:
+            return None, "No relevant images found for this question"
+        
+        # Use the custom prompt or default
+        ocr_prompt = custom_prompt if custom_prompt else st.session_state.ocr_prompt
+        
+        # Get the original images from session state
+        original_images = st.session_state.get(f"original_images_{test_id}_{student_id}", [])
+        
+        if not original_images:
+            return None, "Original images not found in session state"
+        
+        # Call GPT for each relevant image
+        new_extractions = []
+        for answer in relevant_images:
+            image_index = answer["image_number"] - 1  # Convert to 0-based index
+            
+            if image_index < len(original_images):
+                # Get the original image
+                original_image = original_images[image_index]
+                
+                # Convert image to base64 for OpenAI API
+                import base64
+                img_buffer = io.BytesIO()
+                original_image.save(img_buffer, format='PNG')
+                img_str = base64.b64encode(img_buffer.getvalue()).decode()
+                
+                # Call GPT with the image
+                from openai import OpenAI
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": ocr_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_str}"}}
+                        ]}
+                    ],
+                    temperature=0.0
+                )
+                
+                new_extracted_text = response.choices[0].message.content.strip()
+                
+                new_extraction = {
+                    "image_number": answer["image_number"],
+                    "extracted_text": new_extracted_text,
+                    "character_count": len(new_extracted_text) if new_extracted_text else 0
+                }
+                new_extractions.append(new_extraction)
+            else:
+                # If original image not found, keep the existing extraction
+                new_extractions.append(answer)
+        
+        return new_extractions, "OCR regenerated successfully"
+    except Exception as e:
+        error_msg = f"Error regenerating OCR: {str(e)}"
+        if st.session_state.get('debug_mode', False):
+            st.error(f"Debug: {error_msg}")
+            import traceback
+            st.write(f"Debug: Full traceback: {traceback.format_exc()}")
+        return None, error_msg
+
+def regenerate_analysis_for_question(question_num, custom_prompt, question_text, student_answer, rubric, test_id, student_id):
+    """Regenerate analysis for a specific question using custom prompt"""
+    try:
+        # Check if API key is available
+        if not OPENAI_API_KEY:
+            return None, "OpenAI API key not found"
+        
+        # Validate inputs
+        if not question_text or not student_answer:
+            return None, "Missing question text or student answer"
+        # Create a focused prompt for this specific question
+        if custom_prompt:
+            analysis_prompt = custom_prompt
+        else:
+            analysis_prompt = f"""Analyze the student's work for Question {question_num}.
+
+Question: {question_text}
+Student's Answer: {student_answer}
+Rubric: {rubric}
+
+Provide a detailed analysis including:
+1. Score (0 to max score)
+2. Status (Excellent/Good/Fair/Poor/Not Attempted)
+3. Detailed feedback
+4. Work summary
+5. Mathematical quality assessment
+6. Completion status
+
+Return as JSON:
+{{
+    "score": <score>,
+    "max_score": <max_score>,
+    "status": "<status>",
+    "feedback": "<detailed feedback>",
+    "extracted_work": "<work summary>",
+    "mathematical_quality": "<quality assessment>",
+    "completion_status": "<completion status>"
+}}"""
+
+        # Debug: Print the prompt being sent
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: Sending analysis prompt to GPT:")
+            st.text_area("Analysis Prompt", analysis_prompt, height=200, disabled=True)
+
+        # Call GPT for analysis
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": analysis_prompt}
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+        
+        # Debug: Print the raw response
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: GPT Response received:")
+            st.write(f"Debug: Response content: {response.choices[0].message.content}")
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        # Debug: Print the parsed result
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: Parsed JSON result: {result}")
+        
+        return result, "Analysis regenerated successfully"
+    except json.JSONDecodeError as e:
+        error_msg = f"JSON parsing error: {str(e)}. Raw response: {response.choices[0].message.content if 'response' in locals() else 'No response'}"
+        if st.session_state.get('debug_mode', False):
+            st.error(f"Debug: {error_msg}")
+        return None, error_msg
+    except Exception as e:
+        error_msg = f"Error regenerating analysis: {str(e)}"
+        if st.session_state.get('debug_mode', False):
+            st.error(f"Debug: {error_msg}")
+            import traceback
+            st.write(f"Debug: Full traceback: {traceback.format_exc()}")
+        return None, error_msg
+
+def extract_question_answer(extracted_answers, question_num):
+    """Intelligently extract the answer for a specific question from all extracted text"""
+    if not extracted_answers:
+        return ""
+    
+    # Combine all extracted text
+    all_text = ""
+    for answer in extracted_answers:
+        if answer.get('extracted_text'):
+            all_text += f"\n{answer['extracted_text']}\n"
+    
+    # Define patterns to find question boundaries
+    question_patterns = [
+        rf"{question_num}\.\s*",  # "1. "
+        rf"{question_num}\)\s*",  # "1) "
+        rf"Question\s*{question_num}\s*",  # "Question 1"
+        rf"Q{question_num}\s*",  # "Q1"
+    ]
+    
+    # Find the start of the target question
+    start_pos = -1
+    for pattern in question_patterns:
+        match = re.search(pattern, all_text, re.IGNORECASE)
+        if match:
+            start_pos = match.start()
+            break
+    
+    if start_pos == -1:
+        return ""
+    
+    # Find the end of this question (start of next question or end of text)
+    end_pos = len(all_text)
+    next_question_patterns = [
+        rf"{question_num + 1}\.\s*",  # "2. "
+        rf"{question_num + 1}\)\s*",  # "2) "
+        rf"Question\s*{question_num + 1}\s*",  # "Question 2"
+        rf"Q{question_num + 1}\s*",  # "Q2"
+    ]
+    
+    for pattern in next_question_patterns:
+        match = re.search(pattern, all_text[start_pos:], re.IGNORECASE)
+        if match:
+            end_pos = start_pos + match.start()
+            break
+    
+    # Extract the question answer
+    question_answer = all_text[start_pos:end_pos].strip()
+    
+    # Clean up the answer
+    lines = question_answer.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
 def extract_text_from_image(image):
     """Extract text from image using GPT-4o OCR with human-readable formatting"""
     try:
@@ -429,15 +653,15 @@ def extract_text_from_image(image):
     except Exception as e:
         return f"GPT-4o OCR failed: {str(e)}"
 
-def save_extracted_content(test_title, student_name, question_text, rubric, answer_images, question_analysis, final_score):
-    """Save all extracted content to a comprehensive file"""
+def save_extracted_content(test_title, student_name, question_text, rubric, answer_images, question_analysis, final_score, summary_data=None):
+    """Save all extracted content to a comprehensive DOC file"""
     try:
         # Create reports directory if it doesn't exist
         os.makedirs("grading_reports", exist_ok=True)
         
         # Generate filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"grading_reports/{test_title}_{student_name}_{timestamp}.json"
+        doc_filename = f"grading_reports/{test_title}_{student_name}_{timestamp}.docx"
         
         # Extract text from all answer images
         extracted_answers = []
@@ -449,43 +673,207 @@ def save_extracted_content(test_title, student_name, question_text, rubric, answ
                 "character_count": len(extracted_text) if extracted_text else 0
             })
         
-        # Create comprehensive report
-        report_data = {
-            "metadata": {
-                "test_title": test_title,
-                "student_name": student_name,
-                "grading_date": datetime.now().isoformat(),
-                "total_score": final_score,
-                "total_questions": len(question_analysis)
-            },
-            "question_paper": {
-                "extracted_text": question_text,
-                "character_count": len(question_text) if question_text else 0
-            },
-            "rubric": {
-                "extracted_text": rubric,
-                "character_count": len(rubric) if rubric else 0
-            },
-            "answer_scripts": {
-                "total_images": len(answer_images),
-                "extracted_content": extracted_answers
-            },
-            "grading_results": {
-                "question_analysis": question_analysis,
-                "summary": {
-                    "overall_remarks": question_analysis[0].get('overall_remarks', 'No summary available') if question_analysis else 'No summary available',
-                    "rubric_analysis": question_analysis[0].get('rubric_analysis', []) if question_analysis else [],
-                    "mathematical_thinking": question_analysis[0].get('mathematical_thinking', 'No analysis available') if question_analysis else 'No analysis available',
-                    "learning_recommendations": question_analysis[0].get('learning_recommendations', 'No recommendations available') if question_analysis else 'No recommendations available'
-                }
-            }
-        }
+        # Create DOC document
+        doc = Document()
         
-        # Save to JSON file
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(report_data, f, indent=2, ensure_ascii=False)
+        # Title
+        title = doc.add_heading(f'Grading Report: {test_title}', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        return filename
+        # Metadata
+        doc.add_heading('Report Information', level=1)
+        doc.add_paragraph(f'Student: {student_name}')
+        doc.add_paragraph(f'Test: {test_title}')
+        doc.add_paragraph(f'Date: {datetime.now().strftime("%B %d, %Y")}')
+        doc.add_paragraph(f'Total Score: {final_score}/100')
+        doc.add_paragraph(f'Total Questions: {len(question_analysis)}')
+        
+        # Question Paper
+        doc.add_heading('Question Paper', level=1)
+        if question_text:
+            # Format question text properly while preserving structure
+            lines = question_text.split('\n')
+            current_section = None
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Check if it's a section header
+                if line.upper().startswith('SECTION'):
+                    current_section = line
+                    doc.add_heading(line, level=2)
+                
+                # Check if it's a question number (1), 2), etc.)
+                elif re.match(r'^\d+[\)\.]', line):
+                    # Extract question number and text
+                    question_match = re.match(r'^(\d+)[\)\.]\s*(.*)', line)
+                    if question_match:
+                        q_num = question_match.group(1)
+                        q_text = question_match.group(2)
+                        
+                        # Format question with proper spacing
+                        question_heading = f"{q_num}) {q_text}"
+                        doc.add_heading(question_heading, level=3)
+                    else:
+                        doc.add_heading(line, level=3)
+                
+                # Check if it's header information
+                elif any(keyword in line.upper() for keyword in ['CLASS', 'TIME', 'MARKS', 'CAS CLASSES', 'DIFFERENTIATION TEST']):
+                    # Format header information
+                    if 'CAS CLASSES' in line.upper():
+                        # Split CAS CLASSES line into multiple lines for better formatting
+                        parts = line.split('CAS CLASSES')
+                        if len(parts) > 1:
+                            doc.add_paragraph('CAS CLASSES', style='Heading 4')
+                            doc.add_paragraph(parts[1].strip())
+                        else:
+                            doc.add_paragraph(line, style='Heading 4')
+                    elif 'CLASS 12' in line.upper():
+                        doc.add_heading(line, level=4)
+                    elif 'TIME ALLOWED' in line.upper() or 'MAXIMUM MARKS' in line.upper():
+                        doc.add_paragraph(line, style='Heading 4')
+                    else:
+                        doc.add_paragraph(line, style='Heading 4')
+                
+                # Regular question text (continuation of questions)
+                else:
+                    # Check if this is continuation of a question
+                    if current_section and not line.startswith('[') and not line.startswith('Time') and not line.startswith('Maximum'):
+                        doc.add_paragraph(line)
+                    elif line.startswith('[') and line.endswith(']'):
+                        # This is a marks indicator, add it to the previous paragraph
+                        continue
+                    else:
+                        doc.add_paragraph(line)
+        else:
+            doc.add_paragraph("No question text available")
+        
+        # Rubric
+        doc.add_heading('Grading Rubric', level=1)
+        if rubric:
+            # Format rubric text properly
+            rubric_lines = rubric.split('\n')
+            for line in rubric_lines:
+                line = line.strip()
+                if line:
+                    # Check if it's a main topic (starts with capital letter and contains comma)
+                    if ',' in line and line[0].isupper():
+                        # Split by commas and format as bullet points
+                        topics = [topic.strip() for topic in line.split(',')]
+                        for topic in topics:
+                            if topic:
+                                doc.add_paragraph(f"• {topic}", style='List Bullet')
+                    else:
+                        doc.add_paragraph(line)
+        else:
+            doc.add_paragraph("No rubric available")
+        
+        # Extracted Answers
+        doc.add_heading('Student Answers (Extracted from Images)', level=1)
+        for answer in extracted_answers:
+            doc.add_heading(f'Image {answer["image_number"]}', level=2)
+            if answer.get('extracted_text'):
+                # Clean and format extracted text
+                clean_text = answer['extracted_text'].replace('\n\n', '\n').strip()
+                if clean_text:
+                    doc.add_paragraph(clean_text)
+                else:
+                    doc.add_paragraph("No text extracted from this image")
+            else:
+                doc.add_paragraph("No text extracted from this image")
+        
+        # Question Analysis
+        doc.add_heading('Question-by-Question Analysis', level=1)
+        for qa in question_analysis:
+            doc.add_heading(f'Question {qa.get("question_number", "N/A")}', level=2)
+            doc.add_paragraph(f'Score: {qa.get("score", 0)}/{qa.get("max_score", 0)}')
+            doc.add_paragraph(f'Status: {qa.get("status", "Unknown")}')
+            
+            # Clean and format feedback
+            feedback = qa.get("feedback", "No feedback available")
+            if feedback:
+                clean_feedback = feedback.replace('\n', ' ').strip()
+                doc.add_paragraph(f'Feedback: {clean_feedback}')
+            
+            if qa.get('extracted_work'):
+                clean_work = qa.get('extracted_work').replace('\n', ' ').strip()
+                doc.add_paragraph(f'Work Found: {clean_work}')
+            
+            if qa.get('mathematical_quality'):
+                clean_quality = qa.get('mathematical_quality').replace('\n', ' ').strip()
+                doc.add_paragraph(f'Mathematical Quality: {clean_quality}')
+            
+            if qa.get('completion_status'):
+                doc.add_paragraph(f'Completion Status: {qa.get("completion_status")}')
+        
+        # Overall Summary
+        doc.add_heading('Overall Summary', level=1)
+        
+        # Check for summary data passed as parameter
+        summary_found = False
+        if summary_data:
+            if summary_data.get('overall_remarks'):
+                clean_remarks = summary_data.get('overall_remarks').replace('\n', ' ').strip()
+                doc.add_paragraph(clean_remarks)
+                summary_found = True
+            
+            if summary_data.get('mathematical_thinking'):
+                doc.add_heading('Mathematical Thinking Assessment', level=2)
+                clean_thinking = summary_data.get('mathematical_thinking').replace('\n', ' ').strip()
+                doc.add_paragraph(clean_thinking)
+                summary_found = True
+            
+            if summary_data.get('learning_recommendations'):
+                doc.add_heading('Learning Recommendations', level=2)
+                clean_recommendations = summary_data.get('learning_recommendations').replace('\n', ' ').strip()
+                doc.add_paragraph(clean_recommendations)
+                summary_found = True
+        
+        # If no summary found, create a basic summary from scores
+        if not summary_found:
+            total_score = sum(qa.get('score', 0) for qa in question_analysis)
+            max_score = sum(qa.get('max_score', 0) for qa in question_analysis)
+            percentage = (total_score / max_score * 100) if max_score > 0 else 0
+            
+            # Count performance levels
+            excellent_count = sum(1 for qa in question_analysis if qa.get('status') == 'Excellent')
+            good_count = sum(1 for qa in question_analysis if qa.get('status') == 'Good')
+            fair_count = sum(1 for qa in question_analysis if qa.get('status') == 'Fair')
+            poor_count = sum(1 for qa in question_analysis if qa.get('status') == 'Poor')
+            not_attempted = sum(1 for qa in question_analysis if qa.get('status') == 'Not Attempted')
+            
+            # Generate summary
+            summary_text = f"Student achieved a total score of {total_score}/{max_score} ({percentage:.1f}%). "
+            summary_text += f"Performance breakdown: {excellent_count} excellent, {good_count} good, {fair_count} fair, {poor_count} poor, and {not_attempted} not attempted questions. "
+            
+            if percentage >= 90:
+                summary_text += "Overall performance is excellent with strong understanding of the concepts."
+            elif percentage >= 80:
+                summary_text += "Overall performance is very good with minor areas for improvement."
+            elif percentage >= 70:
+                summary_text += "Overall performance is good with some areas needing attention."
+            elif percentage >= 60:
+                summary_text += "Overall performance is satisfactory but requires significant improvement."
+            else:
+                summary_text += "Overall performance needs substantial improvement and additional practice."
+            
+            doc.add_paragraph(summary_text)
+            
+            # Add recommendations based on performance
+            doc.add_heading('Recommendations', level=2)
+            if poor_count > 0 or not_attempted > 0:
+                doc.add_paragraph("Focus on reviewing fundamental concepts and practicing basic differentiation techniques.")
+            if fair_count > 0:
+                doc.add_paragraph("Work on improving accuracy and understanding of intermediate-level problems.")
+            if excellent_count < len(question_analysis) * 0.5:
+                doc.add_paragraph("Continue practicing advanced problems to strengthen overall mathematical skills.")
+        
+        # Save DOC file
+        doc.save(doc_filename)
+        
+        return doc_filename
     except Exception as e:
         st.error(f"Error saving extracted content: {e}")
         return None
@@ -609,6 +997,16 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
         st.error("Could not parse questions from the question paper.")
         return {"error": "Failed to parse questions."}
     
+    # Extract full text from all answer images
+    extracted_answers = []
+    for i, img in enumerate(answer_images):
+        extracted_text = extract_text_from_image(img)
+        extracted_answers.append({
+            "image_number": i + 1,
+            "extracted_text": extracted_text,
+            "character_count": len(extracted_text) if extracted_text else 0
+        })
+    
     # Display parsing results
     st.subheader("🔍 Question Parsing Results:")
     st.info(f"✅ Successfully parsed {len(questions)} questions from question paper")
@@ -660,11 +1058,15 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
         rubric=rubric,
         answer_images=answer_images,
         question_analysis=question_analysis,
-        final_score=final_percentage
+        final_score=final_percentage,
+        summary_data=summary_data
     )
     
     if saved_file:
         final_analysis["saved_file"] = saved_file
+    
+    # Add extracted answers to the final analysis
+    final_analysis["extracted_answers"] = extracted_answers
     
     progress_bar.progress(1.0, text="Grading completed!")
     return final_analysis
@@ -762,7 +1164,358 @@ else:
                         st.markdown(f"> {remarks}") # Using markdown for better text flow
                         # --- END OF UI FIX ---
 
-                        st.markdown("**Question-by-Question Breakdown**")
+                        # Display Questions and Student Answers
+                        st.markdown("**📋 Questions and Student Answers**")
+                        
+                        # Parse questions from the test
+                        questions = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', test['question_text'], re.DOTALL)
+                        
+                        if questions:
+                            for i, q in enumerate(questions):
+                                q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+                                
+                                with st.container(border=True):
+                                    st.markdown(f"**Question {q_num}** (Max Score: {q_max_score})")
+                                    
+                                    # Question text with edit capability
+                                    col1, col2 = st.columns([4, 1])
+                                    with col1:
+                                        st.text_area(f"Question {q_num} Text", q_text, height=80, disabled=True, key=f"question_text_{test['id']}_{student['id']}_{q_num}")
+                                    with col2:
+                                        if st.button("✏️ Edit Question", key=f"edit_question_{test['id']}_{student['id']}_{q_num}"):
+                                            st.session_state[f"editing_question_{test['id']}_{student['id']}_{q_num}"] = True
+                                    
+                                    # Edit question text
+                                    if st.session_state.get(f"editing_question_{test['id']}_{student['id']}_{q_num}", False):
+                                        edited_question = st.text_area("Edit Question Text", q_text, height=100, key=f"edit_question_text_{test['id']}_{student['id']}_{q_num}")
+                                        col1, col2 = st.columns(2)
+                                        if col1.button("✅ Save", key=f"save_question_{test['id']}_{student['id']}_{q_num}"):
+                                            st.success("Question updated!")
+                                            st.session_state[f"editing_question_{test['id']}_{student['id']}_{q_num}"] = False
+                                            st.rerun()
+                                        if col2.button("❌ Cancel", key=f"cancel_question_{test['id']}_{student['id']}_{q_num}"):
+                                            st.session_state[f"editing_question_{test['id']}_{student['id']}_{q_num}"] = False
+                                            st.rerun()
+                                    
+                                    # Find corresponding question analysis
+                                    qa = next((qa for qa in submission.get('question_analysis', []) if qa.get('question_number') == q_num), None)
+                                    
+                                    if qa:
+                                        # Show complete extracted answer for this question
+                                        extracted_answers = submission.get('extracted_answers', [])
+                                        if extracted_answers:
+                                            st.markdown("**Complete Student Answer (Extracted from Images):**")
+                                            
+                                            # Intelligent question answer extraction
+                                            relevant_text = extract_question_answer(extracted_answers, q_num)
+                                            
+                                            if relevant_text.strip():
+                                                col1, col2 = st.columns([4, 1])
+                                                with col1:
+                                                    st.text_area(f"Complete Answer for Q{q_num}", relevant_text.strip(), height=300, disabled=True, key=f"complete_answer_{test['id']}_{student['id']}_{q_num}")
+                                                with col2:
+                                                    if st.button("✏️ Edit Answer", key=f"edit_answer_{test['id']}_{student['id']}_{q_num}"):
+                                                        st.session_state[f"editing_answer_{test['id']}_{student['id']}_{q_num}"] = True
+                                                
+                                                # Regenerate OCR for this question
+                                                if st.button("🔄 Regenerate OCR", key=f"regenerate_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                    st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = True
+                                                
+                                                # OCR regeneration interface
+                                                if st.session_state.get(f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}", False):
+                                                    st.markdown("**🔄 Regenerate OCR for Question {q_num}**")
+                                                    
+                                                    # Custom OCR prompt for this question
+                                                    custom_ocr_prompt = st.text_area(
+                                                        f"Custom OCR Prompt for Q{q_num}",
+                                                        value=f"Extract and format the student's answer for Question {q_num} from this image. Focus on mathematical notation and ensure accuracy.",
+                                                        height=100,
+                                                        key=f"ocr_prompt_{test['id']}_{student['id']}_{q_num}"
+                                                    )
+                                                    
+                                                    # Show original images for this question
+                                                    st.markdown("**Original Images:**")
+                                                    for answer in extracted_answers:
+                                                        if answer.get('extracted_text'):
+                                                            # Check if this image contains the question
+                                                            if f"{q_num}." in answer['extracted_text'] or f"{q_num})" in answer['extracted_text']:
+                                                                st.markdown(f"**Image {answer['image_number']}:**")
+                                                                # Here you would show the actual image
+                                                                st.text_area(f"Current OCR for Image {answer['image_number']}", answer['extracted_text'], height=150, disabled=True)
+                                                    
+                                                    col1, col2, col3 = st.columns(3)
+                                                    if col1.button("🔄 Regenerate with Custom Prompt", key=f"execute_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                        with st.spinner("🔄 Regenerating OCR with custom prompt..."):
+                                                            # Get the custom prompt
+                                                            custom_prompt = st.session_state.get(f"ocr_prompt_{test['id']}_{student['id']}_{q_num}", "")
+                                                            
+                                                            # Debug information
+                                                            if st.session_state.get('debug_mode', False):
+                                                                st.write(f"Debug: Custom prompt: {custom_prompt}")
+                                                                st.write(f"Debug: Question number: {q_num}")
+                                                                st.write(f"Debug: Test ID: {test['id']}, Student ID: {student['id']}")
+                                                                session_key = f'original_images_{test["id"]}_{student["id"]}'
+                                                                st.write(f"Debug: Original images in session: {session_key in st.session_state}")
+                                                                if session_key in st.session_state:
+                                                                    st.write(f"Debug: Number of original images: {len(st.session_state[session_key])}")
+                                                            
+                                                            # Call the regeneration function
+                                                            new_extractions, message = regenerate_ocr_for_question(
+                                                                q_num, custom_prompt, extracted_answers, test['id'], student['id']
+                                                            )
+                                                            
+                                                            if new_extractions:
+                                                                # Update the submission with new OCR data
+                                                                submission['extracted_answers'] = new_extractions
+                                                                st.success(f"OCR regenerated successfully! {message}")
+                                                                
+                                                                # Debug: Show new extractions
+                                                                if st.session_state.get('debug_mode', False):
+                                                                    st.write("Debug: New extractions:")
+                                                                    for ext in new_extractions:
+                                                                        st.write(f"  Image {ext['image_number']}: {ext['extracted_text'][:100]}...")
+                                                            else:
+                                                                st.error(f"Failed to regenerate OCR: {message}")
+                                                            
+                                                            st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = False
+                                                            st.rerun()
+                                                    if col2.button("✅ Use Default Prompt", key=f"default_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                        with st.spinner("🔄 Regenerating OCR with default prompt..."):
+                                                            # Call the regeneration function with default prompt
+                                                            new_extractions, message = regenerate_ocr_for_question(
+                                                                q_num, "", extracted_answers, test['id'], student['id']
+                                                            )
+                                                            
+                                                            if new_extractions:
+                                                                # Update the submission with new OCR data
+                                                                submission['extracted_answers'] = new_extractions
+                                                                st.success(f"OCR regenerated with default prompt! {message}")
+                                                            else:
+                                                                st.error(f"Failed to regenerate OCR: {message}")
+                                                            
+                                                            st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = False
+                                                            st.rerun()
+                                                    if col3.button("❌ Cancel OCR", key=f"cancel_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                        st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = False
+                                                        st.rerun()
+                                                
+                                                # Edit answer text
+                                                if st.session_state.get(f"editing_answer_{test['id']}_{student['id']}_{q_num}", False):
+                                                    edited_answer = st.text_area("Edit Student Answer", relevant_text.strip(), height=300, key=f"edit_answer_text_{test['id']}_{student['id']}_{q_num}")
+                                                    col1, col2 = st.columns(2)
+                                                    if col1.button("✅ Save Answer", key=f"save_answer_{test['id']}_{student['id']}_{q_num}"):
+                                                        st.success("Answer updated!")
+                                                        st.session_state[f"editing_answer_{test['id']}_{student['id']}_{q_num}"] = False
+                                                        st.rerun()
+                                                    if col2.button("❌ Cancel Answer", key=f"cancel_answer_{test['id']}_{student['id']}_{q_num}"):
+                                                        st.session_state[f"editing_answer_{test['id']}_{student['id']}_{q_num}"] = False
+                                                        st.rerun()
+                                            else:
+                                                st.warning(f"No specific answer found for Question {q_num}")
+                                        else:
+                                            st.warning("No extracted answers available.")
+                                        
+                                        # Show AI's work summary with edit capability
+                                        if qa.get('extracted_work'):
+                                            st.markdown("**AI's Work Summary:**")
+                                            col1, col2 = st.columns([4, 1])
+                                            with col1:
+                                                st.info(qa.get('extracted_work'))
+                                            with col2:
+                                                if st.button("✏️ Edit Summary", key=f"edit_summary_{test['id']}_{student['id']}_{q_num}"):
+                                                    st.session_state[f"editing_summary_{test['id']}_{student['id']}_{q_num}"] = True
+                                            
+                                            # Edit work summary
+                                            if st.session_state.get(f"editing_summary_{test['id']}_{student['id']}_{q_num}", False):
+                                                edited_summary = st.text_area("Edit Work Summary", qa.get('extracted_work', ''), height=100, key=f"edit_summary_text_{test['id']}_{student['id']}_{q_num}")
+                                                col1, col2 = st.columns(2)
+                                                if col1.button("✅ Save Summary", key=f"save_summary_{test['id']}_{student['id']}_{q_num}"):
+                                                    st.success("Work summary updated!")
+                                                    st.session_state[f"editing_summary_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                                if col2.button("❌ Cancel Summary", key=f"cancel_summary_{test['id']}_{student['id']}_{q_num}"):
+                                                    st.session_state[f"editing_summary_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                        
+                                        # Show score and status with edit capability
+                                        col1, col2, col3 = st.columns([2, 1, 1])
+                                        with col1:
+                                            score = qa.get('score', 0)
+                                            max_score = qa.get('max_score', 0)
+                                            st.metric("Score", f"{score}/{max_score}")
+                                        with col2:
+                                            if st.button("✏️ Edit Score", key=f"edit_score_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_score_{test['id']}_{student['id']}_{q_num}"] = True
+                                        with col3:
+                                            status = qa.get('status', 'Unknown')
+                                            status_color = {
+                                                'Excellent': 'success',
+                                                'Good': 'info', 
+                                                'Fair': 'warning',
+                                                'Poor': 'error',
+                                                'Not Attempted': 'error'
+                                            }.get(status, 'secondary')
+                                            st.write(f"**Status:** :{status_color}[{status}]")
+                                        
+                                        # Edit score
+                                        if st.session_state.get(f"editing_score_{test['id']}_{student['id']}_{q_num}", False):
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                new_score = st.number_input("New Score", min_value=0, max_value=max_score, value=score, key=f"new_score_{test['id']}_{student['id']}_{q_num}")
+                                            with col2:
+                                                new_status = st.selectbox("New Status", ['Excellent', 'Good', 'Fair', 'Poor', 'Not Attempted'], index=['Excellent', 'Good', 'Fair', 'Poor', 'Not Attempted'].index(status) if status in ['Excellent', 'Good', 'Fair', 'Poor', 'Not Attempted'] else 0, key=f"new_status_{test['id']}_{student['id']}_{q_num}")
+                                            
+                                            col1, col2 = st.columns(2)
+                                            if col1.button("✅ Save Score", key=f"save_score_{test['id']}_{student['id']}_{q_num}"):
+                                                st.success("Score and status updated!")
+                                                st.session_state[f"editing_score_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
+                                            if col2.button("❌ Cancel Score", key=f"cancel_score_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_score_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
+                                        
+                                        # Show feedback with edit capability
+                                        st.markdown("**Feedback:**")
+                                        col1, col2 = st.columns([4, 1])
+                                        with col1:
+                                            st.write(qa.get('feedback', 'No feedback available.'))
+                                        with col2:
+                                            if st.button("✏️ Edit Feedback", key=f"edit_feedback_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_feedback_{test['id']}_{student['id']}_{q_num}"] = True
+                                        
+                                        # Edit feedback
+                                        if st.session_state.get(f"editing_feedback_{test['id']}_{student['id']}_{q_num}", False):
+                                            edited_feedback = st.text_area("Edit Feedback", qa.get('feedback', 'No feedback available.'), height=100, key=f"edit_feedback_text_{test['id']}_{student['id']}_{q_num}")
+                                            col1, col2 = st.columns(2)
+                                            if col1.button("✅ Save Feedback", key=f"save_feedback_{test['id']}_{student['id']}_{q_num}"):
+                                                st.success("Feedback updated!")
+                                                st.session_state[f"editing_feedback_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
+                                            if col2.button("❌ Cancel Feedback", key=f"cancel_feedback_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_feedback_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
+                                        
+                                        # Regenerate Analysis for this question
+                                        if st.button("🔄 Regenerate Analysis", key=f"regenerate_analysis_{test['id']}_{student['id']}_{q_num}"):
+                                            st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = True
+                                        
+                                        # Analysis regeneration interface
+                                        if st.session_state.get(f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}", False):
+                                            st.markdown("**🔄 Regenerate Analysis for Question {q_num}**")
+                                            
+                                            # Custom analysis prompt for this question
+                                            custom_analysis_prompt = st.text_area(
+                                                f"Custom Analysis Prompt for Q{q_num}",
+                                                value=f"Analyze the student's work for Question {q_num}. Provide detailed feedback on mathematical accuracy, completeness, and areas for improvement.",
+                                                height=100,
+                                                key=f"analysis_prompt_{test['id']}_{student['id']}_{q_num}"
+                                            )
+                                            
+                                            # Show current analysis
+                                            st.markdown("**Current Analysis:**")
+                                            st.info(f"**Score:** {qa.get('score', 0)}/{qa.get('max_score', 0)}")
+                                            st.info(f"**Status:** {qa.get('status', 'Unknown')}")
+                                            st.info(f"**Feedback:** {qa.get('feedback', 'No feedback available.')}")
+                                            if qa.get('extracted_work'):
+                                                st.info(f"**Work Summary:** {qa.get('extracted_work')}")
+                                            
+                                            col1, col2, col3 = st.columns(3)
+                                            if col1.button("🔄 Regenerate with Custom Prompt", key=f"execute_analysis_{test['id']}_{student['id']}_{q_num}"):
+                                                with st.spinner("🔄 Regenerating analysis with custom prompt..."):
+                                                    # Get the custom prompt
+                                                    custom_prompt = st.session_state.get(f"analysis_prompt_{test['id']}_{student['id']}_{q_num}", "")
+                                                    
+                                                    # Debug information
+                                                    if st.session_state.get('debug_mode', False):
+                                                        st.write(f"Debug: Custom analysis prompt: {custom_prompt}")
+                                                        st.write(f"Debug: Question number: {q_num}")
+                                                        st.write(f"Debug: Question text: {q_text[:100]}...")
+                                                    
+                                                    # Get current student answer
+                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    
+                                                    if st.session_state.get('debug_mode', False):
+                                                        st.write(f"Debug: Student answer: {student_answer[:100]}...")
+                                                    
+                                                    # Call the regeneration function
+                                                    new_analysis, message = regenerate_analysis_for_question(
+                                                        q_num, custom_prompt, q_text, student_answer, test['rubric'], test['id'], student['id']
+                                                    )
+                                                    
+                                                    if new_analysis:
+                                                        if st.session_state.get('debug_mode', False):
+                                                            st.write(f"Debug: New analysis received: {new_analysis}")
+                                                        
+                                                        # Update the question analysis in the session state
+                                                        submission_key = f"test_{test['id']}_{student['id']}"
+                                                        if submission_key in st.session_state.submissions:
+                                                            # Find and update the specific question analysis
+                                                            for i, qa_item in enumerate(st.session_state.submissions[submission_key].get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    st.session_state.submissions[submission_key]['question_analysis'][i].update(new_analysis)
+                                                                    if st.session_state.get('debug_mode', False):
+                                                                        st.write(f"Debug: Updated question {q_num} in session state")
+                                                                    break
+                                                        
+                                                        st.success(f"Analysis regenerated successfully! {message}")
+                                                    else:
+                                                        st.error(f"Failed to regenerate analysis: {message}")
+                                                    
+                                                    st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                            if col2.button("✅ Use Default Prompt", key=f"default_analysis_{test['id']}_{student['id']}_{q_num}"):
+                                                with st.spinner("🔄 Regenerating analysis with default prompt..."):
+                                                    # Get current student answer
+                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    
+                                                    # Call the regeneration function with default prompt
+                                                    new_analysis, message = regenerate_analysis_for_question(
+                                                        q_num, "", q_text, student_answer, test['rubric'], test['id'], student['id']
+                                                    )
+                                                    
+                                                    if new_analysis:
+                                                        # Update the question analysis in the session state
+                                                        submission_key = f"test_{test['id']}_{student['id']}"
+                                                        if submission_key in st.session_state.submissions:
+                                                            # Find and update the specific question analysis
+                                                            for i, qa_item in enumerate(st.session_state.submissions[submission_key].get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    st.session_state.submissions[submission_key]['question_analysis'][i].update(new_analysis)
+                                                                    break
+                                                        
+                                                        st.success(f"Analysis regenerated with default prompt! {message}")
+                                                    else:
+                                                        st.error(f"Failed to regenerate analysis: {message}")
+                                                    
+                                                    st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                            if col3.button("❌ Cancel Analysis", key=f"cancel_analysis_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
+                                        
+                                        # Show mathematical quality assessment if available
+                                        if qa.get('mathematical_quality'):
+                                            st.info(f"**Mathematical Quality:** {qa.get('mathematical_quality')}")
+                                        
+                                        # Show completion status if available
+                                        if qa.get('completion_status'):
+                                            completion_status = qa.get('completion_status')
+                                            completion_color = {
+                                                'Complete': 'success',
+                                                'Nearly Complete': 'info',
+                                                'Partially Complete': 'warning',
+                                                'Incomplete': 'error',
+                                                'Abandoned': 'error'
+                                            }.get(completion_status, 'secondary')
+                                            st.write(f"**Completion:** :{completion_color}[{completion_status}]")
+                                    else:
+                                        st.warning("No analysis available for this question.")
+                                    
+                                    st.divider()
+                        else:
+                            st.warning("Could not parse questions from the test.")
+
+                        st.markdown("**📊 Detailed Question Analysis**")
                         question_analysis = submission.get('question_analysis', [])
                         if question_analysis:
                             for qa in question_analysis:
@@ -836,15 +1589,16 @@ else:
                             
                             # Provide download button for the saved file
                             try:
-                                with open(submission.get('saved_file'), 'r', encoding='utf-8') as f:
+                                with open(submission.get('saved_file'), 'rb') as f:
                                     file_content = f.read()
                                 
                                 st.download_button(
-                                    label="📥 Download Complete Report",
+                                    label="📥 Download Complete Report (DOC)",
                                     data=file_content,
-                                    file_name=f"grading_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                                    mime="application/json",
-                                    help="Download the complete grading report with all extracted content"
+                                    file_name=f"grading_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    help="Download the complete grading report as a DOC file with all extracted content",
+                                    key=f"download_doc_{test['id']}_{student['id']}"
                                 )
                             except Exception as e:
                                 st.warning(f"Could not prepare download: {e}")
@@ -868,6 +1622,9 @@ else:
                         if answer_images:
                             st.success(f"✅ Successfully converted {len(answer_images)} image(s) for analysis")
                             
+                            # Store original images in session state for regeneration
+                            st.session_state[f"original_images_{test['id']}_{student['id']}"] = answer_images
+                            
                             # Show preview of processed images
                             with st.expander("👁️ Preview Processed Answer Images", expanded=False):
                                 for i, img in enumerate(answer_images):
@@ -886,6 +1643,16 @@ else:
                             
                             progress_bar.progress(0.1, text="Starting evaluation...")
                             result = grade_handwritten_submission_with_gpt4o(test['question_text'], answer_images, test['rubric'], test['title'], progress_bar)
+                            
+                            # Debug: Check if extracted answers are in result
+                            if st.session_state.get('debug_mode', False):
+                                st.subheader("🔍 Debug: Result Contents")
+                                st.write("Result keys:", list(result.keys()) if isinstance(result, dict) else "Not a dict")
+                                if isinstance(result, dict) and 'extracted_answers' in result:
+                                    st.write("Extracted answers found:", len(result['extracted_answers']))
+                                else:
+                                    st.write("No extracted_answers in result")
+                            
                             st.session_state.submissions[submission_key] = {"status": "error" if "error" in result else "graded", **result}
                             st.rerun()
                         else:

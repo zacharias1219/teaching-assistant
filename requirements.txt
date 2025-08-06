@@ -5,4 +5,5 @@ pytesseract
 openai
 torch
 transformers
-toml 
+toml
+python-docx 
