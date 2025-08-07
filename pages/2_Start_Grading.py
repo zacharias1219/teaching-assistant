@@ -328,7 +328,7 @@ Return only the converted text content, no explanations."""
 st.title("💯 Start Grading (Professional Engine)")
 st.info("This version uses a multi-step, 'Divide & Conquer' process for maximum accuracy and consistency.")
 
-st.info("🔍 **gpt-o4-mini OCR Enabled:** This app now uses gpt-o4-mini's built-in OCR capabilities to extract text from images. No additional software installation required!")
+st.info("🔍 **gpt-4o-mini OCR Enabled:** This app now uses gpt-4o-mini's built-in OCR capabilities to extract text from images. No additional software installation required!")
 
 # Load OpenAI API key from Streamlit secrets (for deployment) or local config
 try:
@@ -448,7 +448,7 @@ def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test
                 client = OpenAI(api_key=OPENAI_API_KEY)
                 
                 response = client.chat.completions.create(
-                    model="gpt-o4-mini",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "user", "content": [
                             {"type": "text", "text": ocr_prompt},
@@ -528,7 +528,7 @@ Return as JSON:
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-o4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": analysis_prompt}
             ],
@@ -620,7 +620,7 @@ def extract_question_answer(extracted_answers, question_num):
     return '\n'.join(cleaned_lines)
 
 def extract_text_from_image(image):
-    """Extract text from image using gpt-o4-mini OCR with human-readable formatting"""
+    """Extract text from image using gpt-4o-mini OCR with human-readable formatting"""
     try:
         # Convert image to base64 for OpenAI API
         import base64
@@ -640,7 +640,7 @@ def extract_text_from_image(image):
             st.text_area("OCR Prompt", ocr_prompt, height=150, disabled=True)
         
         response = client.chat.completions.create(
-            model="gpt-o4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": ocr_prompt},
@@ -651,7 +651,7 @@ def extract_text_from_image(image):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"gpt-o4-mini OCR failed: {str(e)}"
+        return f"gpt-4o-mini OCR failed: {str(e)}"
 
 def save_extracted_content(test_title, student_name, question_text, rubric, answer_images, question_analysis, final_score, summary_data=None):
     """Save all extracted content to a comprehensive DOC file"""
@@ -938,7 +938,7 @@ def _grade_all_questions_with_gpt4o(questions, answer_images):
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-o4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": prompt},
@@ -980,7 +980,7 @@ def _generate_summary_with_gpt4o(full_analysis, rubric):
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-o4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -1087,10 +1087,10 @@ with st.expander("➕ Add a New Test", expanded=True):
                 if rubric_files.type == "application/pdf":
                     test_rubric = extract_text_from_pdf(rubric_files)
                 elif rubric_files.type.startswith("image/"):
-                    # For single image, extract text using gpt-o4-mini OCR
+                    # For single image, extract text using gpt-4o-mini OCR
                     image = Image.open(rubric_files)
                     test_rubric = extract_text_from_image(image)
-                    if not test_rubric or test_rubric.startswith("gpt-o4-mini OCR failed"):
+                    if not test_rubric or test_rubric.startswith("gpt-4o-mini OCR failed"):
                         test_rubric = "Rubric uploaded as image. Please ensure the rubric is clearly visible in the image."
                 else:
                     test_rubric = ""
@@ -1103,10 +1103,10 @@ with st.expander("➕ Add a New Test", expanded=True):
             if question_paper_files.type == "application/pdf":
                 question_text = extract_text_from_pdf(question_paper_files)
             elif question_paper_files.type.startswith("image/"):
-                # For single image, extract text using gpt-o4-mini OCR
+                # For single image, extract text using gpt-4o-mini OCR
                 image = Image.open(question_paper_files)
                 question_text = extract_text_from_image(image)
-                if not question_text or question_text.startswith("gpt-o4-mini OCR failed"):
+                if not question_text or question_text.startswith("gpt-4o-mini OCR failed"):
                     question_text = "Question paper uploaded as image. Please ensure all questions are clearly visible in the image."
             else:
                 question_text = ""
@@ -1633,9 +1633,9 @@ else:
                                     
                                     # Extract and display text from each image
                                     extracted_text = extract_text_from_image(img)
-                                    if extracted_text and not extracted_text.startswith("gpt-o4-mini OCR failed"):
+                                    if extracted_text and not extracted_text.startswith("gpt-4o-mini OCR failed"):
                                         st.text_area(f"Extracted Text from Image {i+1}", extracted_text, height=100, disabled=True)
-                                        st.info(f"✅ gpt-o4-mini extracted {len(extracted_text)} characters from Image {i+1}")
+                                        st.info(f"✅ gpt-4o-mini extracted {len(extracted_text)} characters from Image {i+1}")
                                     else:
                                         st.warning(f"⚠️ {extracted_text}")
                                         st.info("💡 **Note:** The AI grading will still work using image analysis, even without text extraction.")
