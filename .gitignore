@@ -47,3 +47,6 @@ Thumbs.db
 
 # Grading reports
 grading_reports/
+src/
+README.md
+app.py

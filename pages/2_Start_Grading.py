@@ -109,23 +109,42 @@ Provide specific, actionable guidance for:
     "learning_recommendations": "<comprehensive study and practice recommendations for continued mathematical development>"
 }}"""
 
-if "ocr_prompt" not in st.session_state:
-    st.session_state.ocr_prompt = """Extract all text from this image and convert it to human-readable format.
+# Add debug mode toggle
+debug_mode = st.sidebar.checkbox("🐛 Debug Mode", value=False, help="Enable debug information to troubleshoot issues")
+st.session_state.debug_mode = debug_mode
 
-IMPORTANT FORMATTING RULES:
-1. Convert all mathematical notation to readable text:
-   - Fractions: Write as "numerator/denominator" (e.g., "dy/dx" not "\\frac{dy}{dx}")
-   - Square roots: Write as "sqrt(expression)" (e.g., "sqrt(1-x^2)" not "\\sqrt{1-x^2}")
-   - Powers: Write as "base^exponent" (e.g., "x^2" not "x^{2}")
-   - Logarithms: Write as "log(expression)" (e.g., "log(x)" not "\\log(x)")
-   - Trigonometric functions: Write as "sin(x)", "cos(x)", "tan(x)" etc.
-   - Greek letters: Write as "alpha", "beta", "theta", "pi" etc.
+# Force reset the OCR prompt to the new version
+st.session_state.ocr_prompt = """TRANSCRIBE THE TEXT FROM THIS IMAGE AND CONVERT TO HUMAN-READABLE MATHEMATICAL NOTATION.
 
-2. Make the text flow naturally and be easy to read
-3. Preserve the mathematical meaning but in plain text format
-4. Use standard keyboard symbols instead of LaTeX notation
+You are an OCR system. Your job is to read the text and convert it to human-readable mathematical notation.
 
-Return only the converted text content, no explanations."""
+CONVERT TO HUMAN-READABLE FORMAT:
+- \( \sqrt{} \) → √ (square root symbol)
+- \( \arcsin \) → arcsin (inverse sine)
+- \( \arccos \) → arccos (inverse cosine)
+- \( \sin^{-1} \) → arcsin (inverse sine)
+- \( \cos^{-1} \) → arccos (inverse cosine)
+- \( \frac{dy}{dx} \) → dy/dx (derivative)
+- \( \frac{}{} \) → / (fraction bar)
+- \( x^2 \) → x² (superscript)
+- \( x_2 \) → x₂ (subscript)
+- Remove all backslashes \( \) and dollar signs
+- Convert LaTeX to plain mathematical notation
+- Make it easy for humans to read
+
+EXAMPLE CONVERSION:
+- \( x = \sqrt{\arcsin t} \) → x = √(arcsin t)
+- \( y = \sqrt{\arccos t} \) → y = √(arccos t)
+- \( \frac{dy}{dx} = -\frac{y}{x} \) → dy/dx = -y/x
+
+DO NOT:
+- Say you cannot extract text
+- Provide formatting instructions
+- Give examples
+- Explain what you can do
+- Keep LaTeX notation
+
+Output only the human-readable mathematical text. Nothing else."""
 
 # Sidebar for prompt editing
 with st.sidebar:
@@ -158,18 +177,10 @@ with st.sidebar:
         st.session_state.summary_prompt = new_summary_prompt
         st.success("✅ Summary prompt updated!")
     
-    # OCR prompt editor
-    st.subheader("🔍 OCR Prompt")
-    st.caption("Controls how the AI extracts text from images")
-    new_ocr_prompt = st.text_area(
-        "OCR System Prompt",
-        value=st.session_state.ocr_prompt,
-        height=200,
-        help="This prompt controls how the AI converts mathematical notation to readable text"
-    )
-    if new_ocr_prompt != st.session_state.ocr_prompt:
-        st.session_state.ocr_prompt = new_ocr_prompt
-        st.success("✅ OCR prompt updated!")
+    # OCR prompt editor (now handled per question)
+    st.subheader("🔍 OCR Configuration")
+    st.caption("OCR prompts are now configured individually for each question")
+    st.info("💡 Use the 'Test Questions & OCR Configuration' section below to set custom OCR prompts for each question.")
     
     # Debug mode toggle
     st.divider()
@@ -178,6 +189,42 @@ with st.sidebar:
     if debug_mode != st.session_state.get('debug_mode', False):
         st.session_state.debug_mode = debug_mode
         st.success("✅ Debug mode updated!")
+    
+    # Force reset OCR prompt
+    if st.button("🔄 Force Reset OCR Prompt"):
+        st.session_state.ocr_prompt = """TRANSCRIBE THE TEXT FROM THIS IMAGE AND CONVERT TO HUMAN-READABLE MATHEMATICAL NOTATION.
+
+You are an OCR system. Your job is to read the text and convert it to human-readable mathematical notation.
+
+CONVERT TO HUMAN-READABLE FORMAT:
+- \( \sqrt{} \) → √ (square root symbol)
+- \( \arcsin \) → arcsin (inverse sine)
+- \( \arccos \) → arccos (inverse cosine)
+- \( \sin^{-1} \) → arcsin (inverse sine)
+- \( \cos^{-1} \) → arccos (inverse cosine)
+- \( \frac{dy}{dx} \) → dy/dx (derivative)
+- \( \frac{}{} \) → / (fraction bar)
+- \( x^2 \) → x² (superscript)
+- \( x_2 \) → x₂ (subscript)
+- Remove all backslashes \( \) and dollar signs
+- Convert LaTeX to plain mathematical notation
+- Make it easy for humans to read
+
+EXAMPLE CONVERSION:
+- \( x = \sqrt{\arcsin t} \) → x = √(arcsin t)
+- \( y = \sqrt{\arccos t} \) → y = √(arccos t)
+- \( \frac{dy}{dx} = -\frac{y}{x} \) → dy/dx = -y/x
+
+DO NOT:
+- Say you cannot extract text
+- Provide formatting instructions
+- Give examples
+- Explain what you can do
+- Keep LaTeX notation
+
+Output only the human-readable mathematical text. Nothing else."""
+        st.success("✅ OCR prompt force reset!")
+        st.rerun()
     
     # Reset buttons
     st.divider()
@@ -268,6 +315,7 @@ Provide specific, actionable guidance for:
     "mathematical_thinking": "<assessment of problem-solving approach, logical reasoning, and mathematical communication>",
     "learning_recommendations": "<comprehensive study and practice recommendations for continued mathematical development>"
 }}"""
+        st.success("✅ Prompts reset to default! OCR prompts are now configured per question.")
         st.session_state.ocr_prompt = """Extract all text from this image and convert it to human-readable format.
 
 IMPORTANT FORMATTING RULES:
@@ -326,9 +374,6 @@ Return only the converted text content, no explanations."""
         st.info("No reports directory found.")
 
 st.title("💯 Start Grading (Professional Engine)")
-st.info("This version uses a multi-step, 'Divide & Conquer' process for maximum accuracy and consistency.")
-
-st.info("🔍 **gpt-4o-mini OCR Enabled:** This app now uses gpt-4o-mini's built-in OCR capabilities to extract text from images. No additional software installation required!")
 
 # Load OpenAI API key from Streamlit secrets (for deployment) or local config
 try:
@@ -371,17 +416,101 @@ if "students" not in st.session_state:
     st.session_state.students = []
 if "submissions" not in st.session_state:
     st.session_state.submissions = {}
+if "question_database" not in st.session_state:
+    st.session_state.question_database = {}  # Store all questions with their modifications
 
+
+# --- Helper Functions for Question Management ---
+def update_question_in_database(test_title, question_num, new_question_text, max_score):
+    """Update a question in the global question database"""
+    sanitized_title = test_title.replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+    question_key = f"{sanitized_title}_Q{question_num}"
+    
+    st.session_state.question_database[question_key] = {
+        "test_title": test_title,
+        "question_num": question_num,
+        "question_text": new_question_text,
+        "max_score": max_score,
+        "last_modified": datetime.now().isoformat()
+    }
+    
+    # Also update the questions list in session state
+    questions_key = f"questions_{sanitized_title}"
+    if questions_key in st.session_state:
+        questions = st.session_state[questions_key]
+        for i, (q_num, q_text, q_score) in enumerate(questions):
+            if q_num == question_num:
+                questions[i] = (question_num, new_question_text, max_score)
+                st.session_state[questions_key] = questions
+                break
+
+def get_question_from_database(test_title, question_num):
+    """Get a question from the global question database"""
+    sanitized_title = test_title.replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+    question_key = f"{sanitized_title}_Q{question_num}"
+    
+    if question_key in st.session_state.question_database:
+        return st.session_state.question_database[question_key]["question_text"]
+    return None
+
+def get_all_questions_for_test(test_title):
+    """Get all questions for a test from the database"""
+    sanitized_title = test_title.replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+    questions = []
+    
+    # Get questions from database
+    for key, value in st.session_state.question_database.items():
+        if key.startswith(f"{sanitized_title}_Q"):
+            questions.append((value["question_num"], value["question_text"], value["max_score"]))
+    
+    # Sort by question number (handle both string and integer)
+    questions.sort(key=lambda x: int(x[0]) if isinstance(x[0], str) else x[0])
+    return questions
+
+def save_updated_results_to_database(test_id, student_id, question_num, new_analysis):
+    """Save updated results to a persistent database"""
+    if "results_database" not in st.session_state:
+        st.session_state.results_database = {}
+    
+    # Create a unique key for this result
+    result_key = f"{test_id}_{student_id}_Q{question_num}"
+    
+    # Store the updated result with timestamp
+    st.session_state.results_database[result_key] = {
+        "test_id": test_id,
+        "student_id": student_id,
+        "question_num": question_num,
+        "analysis": new_analysis,
+        "updated_at": datetime.now().isoformat(),
+        "updated_by": "custom_prompt"  # Could be enhanced to track user
+    }
+    
+    return True
 
 # --- Helper and AI Functions (Unchanged) ---
 def extract_text_from_pdf(file):
     try:
+        # First try to extract text directly from PDF
         doc = fitz.open(stream=file.read(), filetype="pdf")
         text = "".join(page.get_text() for page in doc)
         doc.close()
-        return text
+        
+        # If we got meaningful text, return it
+        if text and len(text.strip()) > 10:
+            return text
+        
+        # If no meaningful text, convert PDF to images and use OCR
+        file.seek(0)  # Reset file pointer
+        images = convert_pdf_to_images(file)
+        
+        if images:
+            # Use our improved OCR on the first page
+            extracted_text = extract_text_from_image(images[0])
+            return extracted_text
+        
+        return text  # Return whatever we got
     except Exception as e:
-        st.error(f"Error reading text PDF: {e}")
+        st.error(f"Error reading PDF: {e}")
         return None
 
 def convert_pdf_to_images(file):
@@ -448,7 +577,7 @@ def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test
                 client = OpenAI(api_key=OPENAI_API_KEY)
                 
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o",
                     messages=[
                         {"role": "user", "content": [
                             {"type": "text", "text": ocr_prompt},
@@ -479,19 +608,58 @@ def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test
             st.write(f"Debug: Full traceback: {traceback.format_exc()}")
         return None, error_msg
 
-def regenerate_analysis_for_question(question_num, custom_prompt, question_text, student_answer, rubric, test_id, student_id):
+def regenerate_analysis_for_question(question_num, custom_prompt, question_text, student_answer, rubric, test_id, student_id, extracted_answers=None):
     """Regenerate analysis for a specific question using custom prompt"""
     try:
+        # Debug information
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: regenerate_analysis_for_question called with:")
+            st.write(f"- question_num: {question_num}")
+            st.write(f"- question_text: {question_text[:100]}...")
+            st.write(f"- student_answer: {student_answer[:100] if student_answer else 'None'}...")
+            st.write(f"- extracted_answers: {len(extracted_answers) if extracted_answers else 0} items")
+        
         # Check if API key is available
         if not OPENAI_API_KEY:
             return None, "OpenAI API key not found"
         
         # Validate inputs
-        if not question_text or not student_answer:
-            return None, "Missing question text or student answer"
+        if not question_text:
+            return None, "Missing question text"
+        
+        # If no specific student answer found, use all extracted text
+        if not student_answer or student_answer.strip() == "":
+            # Get all extracted text as fallback
+            all_text = ""
+            if extracted_answers:
+                for answer in extracted_answers:
+                    if answer.get('extracted_text'):
+                        all_text += f"\n{answer['extracted_text']}\n"
+                student_answer = all_text.strip()
+            
+            if not student_answer:
+                # Debug information
+                if st.session_state.get('debug_mode', False):
+                    st.error(f"Debug: No student work found. extracted_answers: {extracted_answers}")
+                return None, "No student work found in any images. Please check if answer images were uploaded and OCR extraction was successful."
         # Create a focused prompt for this specific question
         if custom_prompt:
-            analysis_prompt = custom_prompt
+            # Add JSON requirement to custom prompt
+            if "json" not in custom_prompt.lower():
+                analysis_prompt = f"""{custom_prompt}
+
+Please return your analysis in JSON format:
+{{
+    "score": <score>,
+    "max_score": <max_score>,
+    "status": "<status>",
+    "feedback": "<detailed feedback>",
+    "extracted_work": "<work summary>",
+    "mathematical_quality": "<quality assessment>",
+    "completion_status": "<completion status>"
+}}"""
+            else:
+                analysis_prompt = custom_prompt
         else:
             analysis_prompt = f"""Analyze the student's work for Question {question_num}.
 
@@ -507,7 +675,7 @@ Provide a detailed analysis including:
 5. Mathematical quality assessment
 6. Completion status
 
-Return as JSON:
+Return your analysis in JSON format:
 {{
     "score": <score>,
     "max_score": <max_score>,
@@ -528,7 +696,7 @@ Return as JSON:
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "user", "content": analysis_prompt}
             ],
@@ -572,12 +740,18 @@ def extract_question_answer(extracted_answers, question_num):
         if answer.get('extracted_text'):
             all_text += f"\n{answer['extracted_text']}\n"
     
+    # Debug: Show what text we're working with
+    if st.session_state.get('debug_mode', False):
+        st.write(f"Debug: All extracted text for Q{question_num}:")
+        st.text_area(f"Debug: Full Text", all_text, height=100, disabled=True)
+    
     # Define patterns to find question boundaries
     question_patterns = [
         rf"{question_num}\.\s*",  # "1. "
         rf"{question_num}\)\s*",  # "1) "
         rf"Question\s*{question_num}\s*",  # "Question 1"
         rf"Q{question_num}\s*",  # "Q1"
+        rf"{question_num}\s*",  # "1 " (just the number)
     ]
     
     # Find the start of the target question
@@ -586,10 +760,18 @@ def extract_question_answer(extracted_answers, question_num):
         match = re.search(pattern, all_text, re.IGNORECASE)
         if match:
             start_pos = match.start()
+            if st.session_state.get('debug_mode', False):
+                st.write(f"Debug: Found question {question_num} with pattern: {pattern}")
             break
     
     if start_pos == -1:
-        return ""
+        # If no specific question pattern found, try to find any mathematical content
+        if st.session_state.get('debug_mode', False):
+            st.write(f"Debug: No specific question pattern found for Q{question_num}")
+            st.write(f"Debug: Returning all text as answer")
+        
+        # Return all text if no specific question boundaries found
+        return all_text.strip()
     
     # Find the end of this question (start of next question or end of text)
     end_pos = len(all_text)
@@ -598,12 +780,15 @@ def extract_question_answer(extracted_answers, question_num):
         rf"{question_num + 1}\)\s*",  # "2) "
         rf"Question\s*{question_num + 1}\s*",  # "Question 2"
         rf"Q{question_num + 1}\s*",  # "Q2"
+        rf"{question_num + 1}\s*",  # "2 " (just the number)
     ]
     
     for pattern in next_question_patterns:
         match = re.search(pattern, all_text[start_pos:], re.IGNORECASE)
         if match:
             end_pos = start_pos + match.start()
+            if st.session_state.get('debug_mode', False):
+                st.write(f"Debug: Found end of question {question_num} with pattern: {pattern}")
             break
     
     # Extract the question answer
@@ -617,10 +802,17 @@ def extract_question_answer(extracted_answers, question_num):
         if line:
             cleaned_lines.append(line)
     
-    return '\n'.join(cleaned_lines)
+    final_answer = '\n'.join(cleaned_lines)
+    
+    # Debug: Show the extracted answer
+    if st.session_state.get('debug_mode', False):
+        st.write(f"Debug: Extracted answer for Q{question_num}:")
+        st.text_area(f"Debug: Answer", final_answer, height=100, disabled=True)
+    
+    return final_answer
 
-def extract_text_from_image(image):
-    """Extract text from image using gpt-4o-mini OCR with human-readable formatting"""
+def extract_text_from_image(image, custom_prompt=None):
+    """Extract text from image using GPT-4o OCR with human-readable formatting"""
     try:
         # Convert image to base64 for OpenAI API
         import base64
@@ -631,16 +823,19 @@ def extract_text_from_image(image):
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Use the session state OCR prompt
-        ocr_prompt = st.session_state.ocr_prompt
+        # Use custom prompt if provided, otherwise use the session state OCR prompt
+        ocr_prompt = custom_prompt if custom_prompt else st.session_state.ocr_prompt
         
         # Debug: Show the actual OCR prompt being used (optional)
         if st.session_state.get('debug_mode', False):
             st.subheader("🔍 Debug: OCR Prompt Being Used")
             st.text_area("OCR Prompt", ocr_prompt, height=150, disabled=True)
         
+        # Always show the OCR prompt being used (for debugging)
+        st.info(f"🔍 Using OCR prompt: {ocr_prompt[:100]}...")
+        
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": ocr_prompt},
@@ -651,7 +846,7 @@ def extract_text_from_image(image):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"gpt-4o-mini OCR failed: {str(e)}"
+        return f"GPT-4o OCR failed: {str(e)}"
 
 def save_extracted_content(test_title, student_name, question_text, rubric, answer_images, question_analysis, final_score, summary_data=None):
     """Save all extracted content to a comprehensive DOC file"""
@@ -906,10 +1101,16 @@ def _grade_all_questions_with_gpt4o(questions, answer_images):
     # Create a concise questions list
     questions_text = ""
     for i, q in enumerate(questions):
-        q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
-        # Truncate long question text to keep prompt manageable
-        truncated_text = q_text[:200] + "..." if len(q_text) > 200 else q_text
-        questions_text += f"Q{q_num} ({q_max_score}pts): {truncated_text}\n"
+        # Handle tuples with different lengths (with or without max score)
+        if len(q) == 3:
+            q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+        elif len(q) == 2:
+            q_num, q_text = int(q[0]), q[1].strip()
+            q_max_score = 10  # Default max score
+        else:
+            continue  # Skip invalid questions
+        # Use full question text to preserve modifications
+        questions_text += f"Q{q_num} ({q_max_score}pts): {q_text}\n"
     
     # Use the session state prompt with the questions text
     prompt = st.session_state.grading_prompt.format(questions_text=questions_text)
@@ -938,7 +1139,7 @@ def _grade_all_questions_with_gpt4o(questions, answer_images):
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": prompt},
@@ -954,7 +1155,14 @@ def _grade_all_questions_with_gpt4o(questions, answer_images):
         # Return error results for all questions
         error_results = []
         for q in questions:
-            q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+            # Handle tuples with different lengths (with or without max score)
+            if len(q) == 3:
+                q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+            elif len(q) == 2:
+                q_num, q_text = int(q[0]), q[1].strip()
+                q_max_score = 10  # Default max score
+            else:
+                continue  # Skip invalid questions
             error_results.append({
                 "question_number": q_num, 
                 "status": "Error", 
@@ -980,7 +1188,7 @@ def _generate_summary_with_gpt4o(full_analysis, rubric):
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -992,14 +1200,65 @@ def _generate_summary_with_gpt4o(full_analysis, rubric):
         return {"overall_remarks": "Summary generation failed.", "rubric_analysis": []}
 
 def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric, test_title, progress_bar):
-    questions = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', question_text, re.DOTALL)
-    if not questions:
-        st.error("Could not parse questions from the question paper.")
-        return {"error": "Failed to parse questions."}
+    # Get questions from the global question database
+    questions = get_all_questions_for_test(test_title)
     
-    # Extract full text from all answer images
+    if questions:
+        st.info(f"✅ Using questions from question database ({len(questions)} questions)")
+    else:
+        # Try to parse from the question_text parameter
+        if question_text and len(question_text.strip()) > 10:
+            questions = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', question_text, re.DOTALL)
+            if questions:
+                st.info(f"✅ Parsed {len(questions)} questions from question text")
+                # Store the parsed questions in the database for future use
+                for q_num, q_text, q_max_score in questions:
+                    update_question_in_database(test_title, q_num, q_text, q_max_score)
+            else:
+                # Try alternative parsing patterns
+                questions = re.findall(r'(\d+)[).]\s(.*?)(?=\d+[).]|$)', question_text, re.DOTALL)
+                if questions:
+                    st.info(f"✅ Parsed {len(questions)} questions using alternative pattern")
+                    # Store with default max score of 10
+                    for q_num, q_text in questions:
+                        update_question_in_database(test_title, q_num, q_text.strip(), 10)
+                else:
+                    st.error("Could not parse questions from the question paper.")
+                    st.info("💡 **Debug Info:** Question text length: " + str(len(question_text)) if question_text else "0")
+                    st.info("💡 **Debug Info:** Question text preview: " + (question_text[:200] + "..." if question_text and len(question_text) > 200 else question_text or "None"))
+                    return {"error": "Failed to parse questions."}
+        else:
+            st.error("No question text available for parsing.")
+            st.info("💡 **Debug Info:** Question text is empty or too short")
+            
+            # Try to extract questions from answer images as a last resort
+            st.info("🔄 Attempting to extract questions from answer images...")
+            all_answer_text = ""
+            for i, img in enumerate(answer_images):
+                extracted_text = extract_text_from_image(img)
+                if extracted_text and not extracted_text.startswith("GPT-4o OCR failed"):
+                    all_answer_text += f"\n{extracted_text}\n"
+            
+            if all_answer_text:
+                # Try to find questions in the answer text
+                questions = re.findall(r'(\d+)[).]\s(.*?)(?=\d+[).]|$)', all_answer_text, re.DOTALL)
+                if questions:
+                    st.info(f"✅ Found {len(questions)} questions in answer images")
+                    # Store with default max score of 10
+                    for q_num, q_text in questions:
+                        update_question_in_database(test_title, q_num, q_text.strip(), 10)
+                else:
+                    st.error("Could not find questions in answer images either.")
+                    return {"error": "Failed to parse questions from any source."}
+            else:
+                st.error("Could not extract text from answer images.")
+                return {"error": "No question text available."}
+    
+    # Extract full text from all answer images using custom OCR prompts
     extracted_answers = []
     for i, img in enumerate(answer_images):
+        # Try to find the most relevant custom OCR prompt for this image
+        # For now, use the default prompt, but this could be enhanced to match specific questions
         extracted_text = extract_text_from_image(img)
         extracted_answers.append({
             "image_number": i + 1,
@@ -1013,15 +1272,23 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
     
     with st.expander("📋 Parsed Questions", expanded=False):
         for i, q in enumerate(questions):
-            q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+            # Handle tuples with different lengths (with or without max score)
+            if len(q) == 3:
+                q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+            elif len(q) == 2:
+                q_num, q_text = int(q[0]), q[1].strip()
+                q_max_score = 10  # Default max score
+            else:
+                st.error(f"Invalid question format: {q}")
+                continue
             st.write(f"**Question {q_num}** (Max Score: {q_max_score})")
             st.text_area(f"Question {q_num} Text", q_text, height=80, disabled=True)
             st.divider()
     
-    # Show all prompts in debug mode
+    # Show grading and summary prompts in debug mode (OCR prompt removed)
     if st.session_state.get('debug_mode', False):
-        st.subheader("🔍 Debug: All System Prompts")
-        col1, col2, col3 = st.columns(3)
+        st.subheader("🔍 Debug: System Prompts")
+        col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("**📝 Grading Prompt:**")
@@ -1030,13 +1297,36 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
         with col2:
             st.markdown("**📊 Summary Prompt:**")
             st.text_area("Summary", st.session_state.summary_prompt, height=200, disabled=True)
-        
-        with col3:
-            st.markdown("**🔍 OCR Prompt:**")
-            st.text_area("OCR", st.session_state.ocr_prompt, height=200, disabled=True)
     
     # Grade all questions at once
     progress_bar.progress(0.3, text="Preparing comprehensive analysis...")
+    
+    # Debug: Show which questions are being used for grading
+    if st.session_state.get('debug_mode', False):
+        st.subheader("🔍 Debug: Questions Being Used for Grading")
+        for q_num, q_text, q_max_score in questions:
+            st.write(f"**Q{q_num}** ({q_max_score}pts): {q_text}")
+        
+        st.subheader("🔍 Debug: Question Database Contents")
+        for key, value in st.session_state.question_database.items():
+            if key.startswith(f"{test_title.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')}_Q"):
+                st.write(f"**{key}**: {value['question_text']} (Modified: {value['last_modified']})")
+    
+    # Always show the questions being used for grading (not just in debug mode)
+    st.subheader("📋 Questions Being Used for Evaluation:")
+    for q in questions:
+        # Handle tuples with different lengths (with or without max score)
+        if len(q) == 3:
+            q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+        elif len(q) == 2:
+            q_num, q_text = int(q[0]), q[1].strip()
+            q_max_score = 10  # Default max score
+        else:
+            st.error(f"Invalid question format: {q}")
+            continue
+        st.write(f"**Q{q_num}** ({q_max_score}pts): {q_text}")
+        st.divider()
+    
     question_analysis = _grade_all_questions_with_gpt4o(questions, answer_images)
     
     # Calculate final scores
@@ -1087,10 +1377,10 @@ with st.expander("➕ Add a New Test", expanded=True):
                 if rubric_files.type == "application/pdf":
                     test_rubric = extract_text_from_pdf(rubric_files)
                 elif rubric_files.type.startswith("image/"):
-                    # For single image, extract text using gpt-4o-mini OCR
+                    # For single image, extract text using GPT-4o OCR
                     image = Image.open(rubric_files)
                     test_rubric = extract_text_from_image(image)
-                    if not test_rubric or test_rubric.startswith("gpt-4o-mini OCR failed"):
+                    if not test_rubric or test_rubric.startswith("GPT-4o OCR failed"):
                         test_rubric = "Rubric uploaded as image. Please ensure the rubric is clearly visible in the image."
                 else:
                     test_rubric = ""
@@ -1103,10 +1393,15 @@ with st.expander("➕ Add a New Test", expanded=True):
             if question_paper_files.type == "application/pdf":
                 question_text = extract_text_from_pdf(question_paper_files)
             elif question_paper_files.type.startswith("image/"):
-                # For single image, extract text using gpt-4o-mini OCR
+                # For single image, extract text using GPT-4o OCR
                 image = Image.open(question_paper_files)
+                
+
+                
+                # Use the updated OCR prompt for question paper extraction
                 question_text = extract_text_from_image(image)
-                if not question_text or question_text.startswith("gpt-4o-mini OCR failed"):
+                
+                if not question_text or question_text.startswith("GPT-4o OCR failed"):
                     question_text = "Question paper uploaded as image. Please ensure all questions are clearly visible in the image."
             else:
                 question_text = ""
@@ -1117,6 +1412,107 @@ with st.expander("➕ Add a New Test", expanded=True):
                 st.subheader("📄 Extracted Question Paper Text:")
                 st.text_area("Question Content", question_text, height=200, disabled=True)
                 st.info(f"✅ Successfully extracted {len(question_text)} characters from question paper")
+                
+                # Parse and display individual questions with multiple patterns
+                questions = []
+                
+                # Pattern 1: "1) Question text [3]" (with max score)
+                pattern1 = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', question_text, re.DOTALL)
+                if pattern1:
+                    questions = pattern1
+                    st.info(f"✅ Parsed {len(questions)} questions using pattern 1 (with max scores)")
+                
+                # Pattern 2: "1) Question text" (without max score, default to 10)
+                if not questions:
+                    pattern2 = re.findall(r'(\d+)[).]\s(.*?)(?=\d+[).]|$)', question_text, re.DOTALL)
+                    if pattern2:
+                        questions = [(q[0], q[1].strip(), 10) for q in pattern2]  # Default max score of 10
+                        st.info(f"✅ Parsed {len(questions)} questions using pattern 2 (default max score: 10)")
+                
+                # Pattern 3: "1. Question text" (with dot instead of parenthesis)
+                if not questions:
+                    pattern3 = re.findall(r'(\d+)\.\s(.*?)(?=\d+\.|$)', question_text, re.DOTALL)
+                    if pattern3:
+                        questions = [(q[0], q[1].strip(), 10) for q in pattern3]  # Default max score of 10
+                        st.info(f"✅ Parsed {len(questions)} questions using pattern 3 (dot format)")
+                
+                # Pattern 4: "Question 1: Question text" (explicit question format)
+                if not questions:
+                    pattern4 = re.findall(r'Question\s+(\d+)[:.]\s*(.*?)(?=Question\s+\d+[:.]|$)', question_text, re.DOTALL | re.IGNORECASE)
+                    if pattern4:
+                        questions = [(q[0], q[1].strip(), 10) for q in pattern4]  # Default max score of 10
+                        st.info(f"✅ Parsed {len(questions)} questions using pattern 4 (Question format)")
+                
+                # Debug: Show what we're trying to parse
+                if not questions:
+                    st.error("❌ Could not parse questions with any pattern")
+                    st.write("**Debug: Question text to parse:**")
+                    st.text_area("Raw Question Text", question_text, height=200, disabled=True)
+                    st.write("**Tried patterns:**")
+                    st.write("1. `1) Question text [3]` (with max score)")
+                    st.write("2. `1) Question text` (without max score)")
+                    st.write("3. `1. Question text` (dot format)")
+                    st.write("4. `Question 1: Question text` (explicit format)")
+                    
+                    # Manual question creation option
+                    st.subheader("🔧 Manual Question Creation")
+                    st.info("Since automatic parsing failed, you can manually create questions:")
+                    
+                    num_questions = st.number_input("Number of questions to create:", min_value=1, max_value=20, value=3)
+                    
+                    manual_questions = []
+                    for i in range(num_questions):
+                        with st.container(border=True):
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                question_text_manual = st.text_area(f"Question {i+1} Text", height=100, key=f"manual_q{i+1}")
+                            with col2:
+                                max_score_manual = st.number_input(f"Max Score Q{i+1}", min_value=1, max_value=50, value=10, key=f"manual_score{i+1}")
+                            
+                            if question_text_manual.strip():
+                                manual_questions.append((str(i+1), question_text_manual.strip(), max_score_manual))
+                    
+                    if manual_questions:
+                        questions = manual_questions
+                        st.success(f"✅ Created {len(questions)} manual questions")
+                
+                if questions:
+                    st.subheader("📋 Individual Questions:")
+                    st.info(f"✅ Successfully parsed {len(questions)} questions from question paper")
+                    
+                    # Store questions in session state for persistent display and grading
+                    # Use a sanitized key to avoid issues with special characters
+                    sanitized_title = test_title.replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+                    st.session_state[f"questions_{sanitized_title}"] = questions
+                    
+                    # Also store the original question text for reference
+                    st.session_state[f"original_question_text_{sanitized_title}"] = question_text
+                    
+                    # Store all questions in the global question database
+                    for q_num, q_text, q_max_score in questions:
+                        update_question_in_database(test_title, q_num, q_text, q_max_score)
+                    
+                    for i, q in enumerate(questions):
+                        q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+                        
+                        with st.container(border=True):
+                            col1, col2 = st.columns([4, 1])
+                            with col1:
+                                st.markdown(f"**Question {q_num}** (Max Score: {q_max_score})")
+                                st.text_area(f"Question {q_num} Text", q_text, height=100, disabled=True, key=f"question_display_create_{test_title}_{q_num}")
+                            with col2:
+                                # Individual OCR prompt for each question
+                                st.markdown("**OCR Prompt:**")
+                                default_ocr_prompt = f"TRANSCRIBE QUESTION {q_num} FROM THIS IMAGE. Output only the question text you see."
+                                custom_ocr_prompt = st.text_area(
+                                    f"OCR Prompt for Q{q_num}",
+                                    value=default_ocr_prompt,
+                                    height=120,
+                                    key=f"ocr_prompt_create_{test_title}_{q_num}",
+                                    help=f"Custom OCR prompt for Question {q_num}"
+                                )
+                                # Store the custom OCR prompt
+                                st.session_state[f"custom_ocr_prompt_{sanitized_title}_{q_num}"] = custom_ocr_prompt
             else:
                 st.error("❌ Failed to extract text from question paper")
             
@@ -1137,6 +1533,241 @@ with st.expander("➕ Add a New Test", expanded=True):
 
 st.divider()
 
+# Display persistent questions for existing tests
+if st.session_state.tests:
+    st.subheader("📋 Test Questions & OCR Configuration")
+    st.info(f"Found {len(st.session_state.tests)} test(s) in session state")
+    
+    for test_idx, test in enumerate(st.session_state.tests):
+        # Use sanitized title to match the stored questions
+        sanitized_title = test['title'].replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+        questions = st.session_state.get(f"questions_{sanitized_title}", [])
+        
+        st.write(f"Debug: Test '{test['title']}' has {len(questions) if questions else 0} questions")
+        
+        if questions:
+            with st.expander(f"📝 {test['title']} - Questions & OCR Settings", expanded=True):
+                st.info(f"Configure individual OCR prompts for each question in {test['title']}")
+                
+                # Add explanation of what each section does
+                with st.container(border=True):
+                    st.markdown("**📋 What Each Section Does:**")
+                    st.markdown("""
+                    - **Question Text**: The actual question students will answer (you can edit this)
+                    - **OCR Prompt**: Instructions for extracting question text from question paper images
+                    - **🔄 Regenerate Question**: Use custom OCR prompt to re-extract a specific question from the question paper
+                    - **Test OCR**: Upload sample question paper images to see how your OCR prompts work
+                    """)
+                
+
+                
+                for i, q in enumerate(questions):
+                    q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+                    
+                    with st.container(border=True):
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            st.markdown(f"**Question {q_num}** (Max Score: {q_max_score})")
+                            
+                            # Get the current question text from database (or use original if not found)
+                            current_question_text = get_question_from_database(test['title'], q_num) or q_text
+                            
+                            # Check if we're editing this question
+                            if st.button("✏️ Edit Question", key=f"edit_persistent_question_{test_idx}_{sanitized_title}_{q_num}"):
+                                st.session_state[f"editing_persistent_question_{test_idx}_{sanitized_title}_{q_num}"] = True
+                            
+                            # Show question text (editable or read-only)
+                            if st.session_state.get(f"editing_persistent_question_{test_idx}_{sanitized_title}_{q_num}", False):
+                                edited_question = st.text_area(
+                                    f"Question {q_num} Text (Editing)",
+                                    value=current_question_text,
+                                    height=100,
+                                    key=f"editing_persistent_question_text_{test_idx}_{sanitized_title}_{q_num}"
+                                )
+                                
+                                col1, col2 = st.columns(2)
+                                if col1.button("✅ Save Question", key=f"save_persistent_question_{test_idx}_{sanitized_title}_{q_num}"):
+                                    # Update the question in database
+                                    update_question_in_database(test['title'], q_num, edited_question, q_max_score)
+                                    st.success(f"Question {q_num} updated!")
+                                    st.session_state[f"editing_persistent_question_{test_idx}_{sanitized_title}_{q_num}"] = False
+                                    st.rerun()
+                                if col2.button("❌ Cancel", key=f"cancel_persistent_question_{test_idx}_{sanitized_title}_{q_num}"):
+                                    st.session_state[f"editing_persistent_question_{test_idx}_{sanitized_title}_{q_num}"] = False
+                                    st.rerun()
+                            else:
+                                st.text_area(f"Question {q_num} Text", current_question_text, height=100, disabled=True, key=f"persistent_question_{test_idx}_{sanitized_title}_{q_num}")
+                        with col2:
+                            # Individual OCR prompt for each question
+                            st.markdown("**OCR Prompt:**")
+                            default_ocr_prompt = f"TRANSCRIBE QUESTION {q_num} FROM THIS IMAGE. Output only the question text you see. The question is: {q_text[:100]}..."
+                            stored_prompt = st.session_state.get(f"custom_ocr_prompt_{sanitized_title}_{q_num}", default_ocr_prompt)
+                            custom_ocr_prompt = st.text_area(
+                                f"OCR Prompt for Q{q_num}",
+                                value=stored_prompt,
+                                height=120,
+                                key=f"persistent_ocr_prompt_{test_idx}_{sanitized_title}_{q_num}",
+                                help=f"Custom OCR prompt for extracting Question {q_num} from question paper images"
+                            )
+                            # Store the custom OCR prompt
+                            st.session_state[f"custom_ocr_prompt_{sanitized_title}_{q_num}"] = custom_ocr_prompt
+                            
+                            # Simple regenerate button that modifies the existing text
+                            if st.button("🔄 Regenerate Question", key=f"regenerate_question_{test_idx}_{sanitized_title}_{q_num}"):
+                                # Set flag to show processing
+                                st.session_state[f"processing_question_{test_idx}_{sanitized_title}_{q_num}"] = True
+                                st.rerun()
+                            
+                            # Show processing and results
+                            if st.session_state.get(f"processing_question_{test_idx}_{sanitized_title}_{q_num}", False):
+                                with st.spinner(f"Modifying Question {q_num} with custom OCR prompt..."):
+                                    try:
+                                        from openai import OpenAI
+                                        client = OpenAI(api_key=OPENAI_API_KEY)
+                                        
+                                                                                # Create a prompt that applies the custom OCR instructions to the existing text
+                                        processing_prompt = f"""
+You are an expert at converting complex mathematical notation to human-readable mathematical notation.
+
+OCR Instructions: {custom_ocr_prompt}
+
+Original Question Text: {q_text}
+
+Please convert to human-readable mathematical notation:
+- Keep mathematical symbols but make them clear and readable
+- Convert sqrt(a) to √a (square root symbol)
+- Convert sin^-1(t) to sin⁻¹(t) or arcsin(t)
+- Convert cos^-1(t) to cos⁻¹(t) or arccos(t)
+- Convert dy/dx to dy/dx (keep as fraction)
+- Convert fractions like a/b to a/b (keep as fraction)
+- Use proper mathematical notation that's easy to read
+- Keep it mathematical but readable
+- No backslashes or dollar signs
+
+Return only the human-readable mathematical question text, no explanations or additional text.
+"""
+                                        
+                                        response = client.chat.completions.create(
+                                            model="gpt-4o",
+                                            messages=[
+                                                {"role": "user", "content": processing_prompt}
+                                            ],
+                                            temperature=0.0
+                                        )
+                                        
+                                        modified_question = response.choices[0].message.content.strip()
+                                        
+                                        # Store the results for display
+                                        st.session_state[f"original_question_{test_idx}_{sanitized_title}_{q_num}"] = q_text
+                                        st.session_state[f"modified_question_{test_idx}_{sanitized_title}_{q_num}"] = modified_question
+                                        
+                                        # Update the question in the global database
+                                        update_question_in_database(test['title'], q_num, modified_question, q_max_score)
+                                        
+                                        # Auto-regenerate analysis for all students if question was modified
+                                        if st.session_state.students and st.session_state.submissions:
+                                            st.info("🔄 Auto-regenerating analysis for all students with the updated question...")
+                                            
+                                            for student in st.session_state.students:
+                                                submission_key = f"test_{test['id']}_{student['id']}"
+                                                submission = st.session_state.submissions.get(submission_key)
+                                                
+                                                if submission and submission.get('extracted_answers'):
+                                                    # Get the updated question text
+                                                    updated_question_text = modified_question
+                                                    
+                                                    # Extract student answer for this question
+                                                    student_answer = extract_question_answer(submission['extracted_answers'], q_num)
+                                                    
+                                                    if student_answer and student_answer.strip():
+                                                        # Regenerate analysis with the updated question
+                                                        new_analysis, message = regenerate_analysis_for_question(
+                                                            q_num, "", updated_question_text, student_answer, test['rubric'], test['id'], student['id'], submission['extracted_answers']
+                                                        )
+                                                        
+                                                        if new_analysis:
+                                                            # Update the question analysis in the submission
+                                                            for i, qa_item in enumerate(submission.get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    submission['question_analysis'][i].update(new_analysis)
+                                                                    break
+                                                            
+                                                            # Recalculate total score
+                                                            total_raw_score = sum(q.get('score', 0) for q in submission.get('question_analysis', []))
+                                                            total_possible_score = sum(q.get('max_score', 0) for q in submission.get('question_analysis', []))
+                                                            final_percentage = math.ceil((total_raw_score / total_possible_score) * 100) if total_possible_score > 0 else 0
+                                                            submission['total_score'] = final_percentage
+                                                            
+                                                            # Save to database
+                                                            save_updated_results_to_database(test['id'], student['id'], q_num, new_analysis)
+                                        
+                                        # Clear processing flag
+                                        st.session_state[f"processing_question_{test_idx}_{sanitized_title}_{q_num}"] = False
+                                        st.success(f"Question {q_num} updated and analysis regenerated for all students!")
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"Error applying OCR prompt: {str(e)}")
+                                        st.session_state[f"processing_question_{test_idx}_{sanitized_title}_{q_num}"] = False
+                                        st.rerun()
+                            
+                            # Show before/after comparison if available
+                            if st.session_state.get(f"modified_question_{test_idx}_{sanitized_title}_{q_num}"):
+                                st.markdown("**🔄 Question Modification Results:**")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown("**Before:**")
+                                    original = st.session_state.get(f"original_question_{test_idx}_{sanitized_title}_{q_num}", q_text)
+                                    st.text_area(f"Original Q{q_num}", original, height=100, disabled=True)
+                                with col2:
+                                    st.markdown("**After:**")
+                                    modified = st.session_state.get(f"modified_question_{test_idx}_{sanitized_title}_{q_num}", q_text)
+                                    st.text_area(f"Modified Q{q_num}", modified, height=100, disabled=True)
+                                
+                                col1, col2 = st.columns(2)
+                                if col1.button("✅ Accept Changes", key=f"accept_changes_{test_idx}_{sanitized_title}_{q_num}"):
+                                    # Clear the comparison display
+                                    del st.session_state[f"original_question_{test_idx}_{sanitized_title}_{q_num}"]
+                                    del st.session_state[f"modified_question_{test_idx}_{sanitized_title}_{q_num}"]
+                                    st.rerun()
+                                if col2.button("🔄 Regenerate Analysis", key=f"regenerate_after_change_{test_idx}_{sanitized_title}_{q_num}"):
+                                    # Manually regenerate analysis for all students with the updated question
+                                    if st.session_state.students and st.session_state.submissions:
+                                        with st.spinner(f"🔄 Regenerating analysis for Question {q_num}..."):
+                                            updated_question_text = get_question_from_database(test['title'], q_num) or q_text
+                                            
+                                            for student in st.session_state.students:
+                                                submission_key = f"test_{test['id']}_{student['id']}"
+                                                submission = st.session_state.submissions.get(submission_key)
+                                                
+                                                if submission and submission.get('extracted_answers'):
+                                                    student_answer = extract_question_answer(submission['extracted_answers'], q_num)
+                                                    
+                                                    if student_answer and student_answer.strip():
+                                                        new_analysis, message = regenerate_analysis_for_question(
+                                                            q_num, "", updated_question_text, student_answer, test['rubric'], test['id'], student['id'], submission['extracted_answers']
+                                                        )
+                                                        
+                                                        if new_analysis:
+                                                            for i, qa_item in enumerate(submission.get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    submission['question_analysis'][i].update(new_analysis)
+                                                                    break
+                                                            
+                                                            # Recalculate total score
+                                                            total_raw_score = sum(q.get('score', 0) for q in submission.get('question_analysis', []))
+                                                            total_possible_score = sum(q.get('max_score', 0) for q in submission.get('question_analysis', []))
+                                                            final_percentage = math.ceil((total_raw_score / total_possible_score) * 100) if total_possible_score > 0 else 0
+                                                            submission['total_score'] = final_percentage
+                                                            
+                                                            save_updated_results_to_database(test['id'], student['id'], q_num, new_analysis)
+                                            
+                                            st.success(f"Analysis regenerated for Question {q_num}!")
+                                            st.rerun()
+        else:
+            st.warning(f"⚠️ No questions found for test '{test['title']}'. Questions may not have been parsed correctly during test creation.")
+
+st.divider()
 if not st.session_state.tests:
     st.info("No tests created yet. Add a new test to get started.")
 else:
@@ -1167,12 +1798,32 @@ else:
                         # Display Questions and Student Answers
                         st.markdown("**📋 Questions and Student Answers**")
                         
-                        # Parse questions from the test
-                        questions = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', test['question_text'], re.DOTALL)
+                        # Get questions from the database first, then fall back to parsing
+                        sanitized_title = test['title'].replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
+                        questions = get_all_questions_for_test(test['title'])
+                        
+                        if not questions:
+                            # Fall back to parsing from question text
+                            if test['question_text'] and len(test['question_text'].strip()) > 10:
+                                questions = re.findall(r'(\d+)[).]\s(.*?)(?:\[(\d+)\])', test['question_text'], re.DOTALL)
+                                if not questions:
+                                    # Try alternative parsing patterns
+                                    questions = re.findall(r'(\d+)[).]\s(.*?)(?=\d+[).]|$)', test['question_text'], re.DOTALL)
+                                    if questions:
+                                        # Convert to proper format with default max score
+                                        questions = [(int(q[0]), q[1].strip(), 10) for q in questions]
                         
                         if questions:
                             for i, q in enumerate(questions):
-                                q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+                                # Handle tuples with different lengths (with or without max score)
+                                if len(q) == 3:
+                                    q_num, q_text, q_max_score = int(q[0]), q[1].strip(), int(q[2])
+                                elif len(q) == 2:
+                                    q_num, q_text = int(q[0]), q[1].strip()
+                                    q_max_score = 10  # Default max score
+                                else:
+                                    st.error(f"Invalid question format: {q}")
+                                    continue
                                 
                                 with st.container(border=True):
                                     st.markdown(f"**Question {q_num}** (Max Score: {q_max_score})")
@@ -1338,7 +1989,7 @@ else:
                                                     st.rerun()
                                         
                                         # Show score and status with edit capability
-                                        col1, col2, col3 = st.columns([2, 1, 1])
+                                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                                         with col1:
                                             score = qa.get('score', 0)
                                             max_score = qa.get('max_score', 0)
@@ -1356,6 +2007,12 @@ else:
                                                 'Not Attempted': 'error'
                                             }.get(status, 'secondary')
                                             st.write(f"**Status:** :{status_color}[{status}]")
+                                        with col4:
+                                            # Check if this result was recently updated
+                                            result_key = f"{test['id']}_{student['id']}_Q{q_num}"
+                                            if "results_database" in st.session_state and result_key in st.session_state.results_database:
+                                                updated_time = st.session_state.results_database[result_key]["updated_at"]
+                                                st.info("🔄 Updated")
                                         
                                         # Edit score
                                         if st.session_state.get(f"editing_score_{test['id']}_{student['id']}_{q_num}", False):
@@ -1395,9 +2052,146 @@ else:
                                                 st.session_state[f"editing_feedback_{test['id']}_{student['id']}_{q_num}"] = False
                                                 st.rerun()
                                         
-                                        # Regenerate Analysis for this question
-                                        if st.button("🔄 Regenerate Analysis", key=f"regenerate_analysis_{test['id']}_{student['id']}_{q_num}"):
-                                            st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = True
+                                        # Edit Results and Regenerate Analysis for this question
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            if st.button("🔄 Regenerate Analysis", key=f"regenerate_analysis_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}"] = True
+                                        with col2:
+                                            if st.button("✏️ Edit Results", key=f"edit_results_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_results_{test['id']}_{student['id']}_{q_num}"] = True
+                                        
+                                        # Edit Results interface
+                                        if st.session_state.get(f"editing_results_{test['id']}_{student['id']}_{q_num}", False):
+                                            st.markdown("**✏️ Edit Results for Question {q_num}**")
+                                            
+                                            # Custom results prompt for this question
+                                            custom_results_prompt = st.text_area(
+                                                f"Custom Results Prompt for Q{q_num}",
+                                                value=f"""Analyze the student's work for Question {q_num} and provide a comprehensive evaluation.
+
+Question: {q_text}
+Student's Answer: {relevant_text.strip() if relevant_text.strip() else "No answer provided"}
+Rubric: {test['rubric']}
+
+Please provide:
+1. A detailed score (0 to {q_max_score} points)
+2. Performance status (Excellent/Good/Fair/Poor/Not Attempted)
+3. Comprehensive feedback covering strengths, errors, and improvement suggestions
+4. Assessment of mathematical quality and reasoning
+5. Completion status evaluation
+
+Focus on mathematical accuracy, conceptual understanding, and provide actionable feedback.
+
+Return your analysis in JSON format with the following structure:
+{{
+    "score": <score>,
+    "max_score": <max_score>,
+    "status": "<status>",
+    "feedback": "<detailed feedback>",
+    "extracted_work": "<work summary>",
+    "mathematical_quality": "<quality assessment>",
+    "completion_status": "<completion status>"
+}}""",
+                                                height=200,
+                                                key=f"results_prompt_{test['id']}_{student['id']}_{q_num}"
+                                            )
+                                            
+                                            # Show current results for reference
+                                            st.markdown("**Current Results:**")
+                                            st.info(f"**Score:** {qa.get('score', 0)}/{qa.get('max_score', 0)}")
+                                            st.info(f"**Status:** {qa.get('status', 'Unknown')}")
+                                            st.info(f"**Feedback:** {qa.get('feedback', 'No feedback available.')}")
+                                            
+                                            col1, col2, col3 = st.columns(3)
+                                            if col1.button("🔄 Generate New Results", key=f"execute_results_{test['id']}_{student['id']}_{q_num}"):
+                                                with st.spinner("🔄 Generating new results with custom prompt..."):
+                                                    # Get the custom prompt
+                                                    custom_prompt = st.session_state.get(f"results_prompt_{test['id']}_{student['id']}_{q_num}", "")
+                                                    
+                                                    # Get current student answer
+                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    
+                                                    # Call the regeneration function
+                                                    new_analysis, message = regenerate_analysis_for_question(
+                                                        q_num, custom_prompt, q_text, student_answer, test['rubric'], test['id'], student['id'], extracted_answers
+                                                    )
+                                                    
+                                                    if new_analysis:
+                                                        # Update the question analysis in the session state
+                                                        submission_key = f"test_{test['id']}_{student['id']}"
+                                                        if submission_key in st.session_state.submissions:
+                                                            # Find and update the specific question analysis
+                                                            for i, qa_item in enumerate(st.session_state.submissions[submission_key].get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    # Update with new analysis data
+                                                                    st.session_state.submissions[submission_key]['question_analysis'][i].update(new_analysis)
+                                                                    # Also update the submission object for immediate display
+                                                                    submission['question_analysis'][i].update(new_analysis)
+                                                                    break
+                                                        
+                                                        # Recalculate total score
+                                                        total_raw_score = sum(q.get('score', 0) for q in st.session_state.submissions[submission_key].get('question_analysis', []))
+                                                        total_possible_score = sum(q.get('max_score', 0) for q in st.session_state.submissions[submission_key].get('question_analysis', []))
+                                                        final_percentage = math.ceil((total_raw_score / total_possible_score) * 100) if total_possible_score > 0 else 0
+                                                        
+                                                        # Update total score in submission
+                                                        st.session_state.submissions[submission_key]['total_score'] = final_percentage
+                                                        submission['total_score'] = final_percentage
+                                                        
+                                                        # Save to database for persistence
+                                                        save_updated_results_to_database(test['id'], student['id'], q_num, new_analysis)
+                                                        
+                                                        st.success(f"New results generated successfully! Score updated to {final_percentage}/100")
+                                                    else:
+                                                        st.error(f"Failed to generate new results: {message}")
+                                                    
+                                                    st.session_state[f"editing_results_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                            if col2.button("✅ Use Default Prompt", key=f"default_results_{test['id']}_{student['id']}_{q_num}"):
+                                                with st.spinner("🔄 Generating new results with default prompt..."):
+                                                    # Get current student answer
+                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    
+                                                    # Call the regeneration function with default prompt
+                                                    new_analysis, message = regenerate_analysis_for_question(
+                                                        q_num, "", q_text, student_answer, test['rubric'], test['id'], student['id'], extracted_answers
+                                                    )
+                                                    
+                                                    if new_analysis:
+                                                        # Update the question analysis in the session state
+                                                        submission_key = f"test_{test['id']}_{student['id']}"
+                                                        if submission_key in st.session_state.submissions:
+                                                            # Find and update the specific question analysis
+                                                            for i, qa_item in enumerate(st.session_state.submissions[submission_key].get('question_analysis', [])):
+                                                                if qa_item.get('question_number') == q_num:
+                                                                    # Update with new analysis data
+                                                                    st.session_state.submissions[submission_key]['question_analysis'][i].update(new_analysis)
+                                                                    # Also update the submission object for immediate display
+                                                                    submission['question_analysis'][i].update(new_analysis)
+                                                                    break
+                                                        
+                                                        # Recalculate total score
+                                                        total_raw_score = sum(q.get('score', 0) for q in st.session_state.submissions[submission_key].get('question_analysis', []))
+                                                        total_possible_score = sum(q.get('max_score', 0) for q in st.session_state.submissions[submission_key].get('question_analysis', []))
+                                                        final_percentage = math.ceil((total_raw_score / total_possible_score) * 100) if total_possible_score > 0 else 0
+                                                        
+                                                        # Update total score in submission
+                                                        st.session_state.submissions[submission_key]['total_score'] = final_percentage
+                                                        submission['total_score'] = final_percentage
+                                                        
+                                                        # Save to database for persistence
+                                                        save_updated_results_to_database(test['id'], student['id'], q_num, new_analysis)
+                                                        
+                                                        st.success(f"New results generated with default prompt! Score updated to {final_percentage}/100")
+                                                    else:
+                                                        st.error(f"Failed to generate new results: {message}")
+                                                    
+                                                    st.session_state[f"editing_results_{test['id']}_{student['id']}_{q_num}"] = False
+                                                    st.rerun()
+                                            if col3.button("❌ Cancel Edit", key=f"cancel_results_{test['id']}_{student['id']}_{q_num}"):
+                                                st.session_state[f"editing_results_{test['id']}_{student['id']}_{q_num}"] = False
+                                                st.rerun()
                                         
                                         # Analysis regeneration interface
                                         if st.session_state.get(f"regenerating_analysis_{test['id']}_{student['id']}_{q_num}", False):
@@ -1439,7 +2233,7 @@ else:
                                                     
                                                     # Call the regeneration function
                                                     new_analysis, message = regenerate_analysis_for_question(
-                                                        q_num, custom_prompt, q_text, student_answer, test['rubric'], test['id'], student['id']
+                                                        q_num, custom_prompt, q_text, student_answer, test['rubric'], test['id'], student['id'], extracted_answers
                                                     )
                                                     
                                                     if new_analysis:
@@ -1470,7 +2264,7 @@ else:
                                                     
                                                     # Call the regeneration function with default prompt
                                                     new_analysis, message = regenerate_analysis_for_question(
-                                                        q_num, "", q_text, student_answer, test['rubric'], test['id'], student['id']
+                                                        q_num, "", q_text, student_answer, test['rubric'], test['id'], student['id'], extracted_answers
                                                     )
                                                     
                                                     if new_analysis:
@@ -1633,9 +2427,9 @@ else:
                                     
                                     # Extract and display text from each image
                                     extracted_text = extract_text_from_image(img)
-                                    if extracted_text and not extracted_text.startswith("gpt-4o-mini OCR failed"):
+                                    if extracted_text and not extracted_text.startswith("GPT-4o OCR failed"):
                                         st.text_area(f"Extracted Text from Image {i+1}", extracted_text, height=100, disabled=True)
-                                        st.info(f"✅ gpt-4o-mini extracted {len(extracted_text)} characters from Image {i+1}")
+                                        st.info(f"✅ GPT-4o extracted {len(extracted_text)} characters from Image {i+1}")
                                     else:
                                         st.warning(f"⚠️ {extracted_text}")
                                         st.info("💡 **Note:** The AI grading will still work using image analysis, even without text extraction.")
