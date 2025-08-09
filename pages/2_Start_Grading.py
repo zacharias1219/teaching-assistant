@@ -113,38 +113,23 @@ Provide specific, actionable guidance for:
 debug_mode = st.sidebar.checkbox("🐛 Debug Mode", value=False, help="Enable debug information to troubleshoot issues")
 st.session_state.debug_mode = debug_mode
 
-# Force reset the OCR prompt to the new version
-st.session_state.ocr_prompt = """TRANSCRIBE THE TEXT FROM THIS IMAGE AND CONVERT TO HUMAN-READABLE MATHEMATICAL NOTATION.
+# Force reset the OCR prompt to a high-fidelity full-transcription version
+st.session_state.ocr_prompt = """TRANSCRIBE ALL VISIBLE TEXT EXACTLY (FOCUS: COMPLETE HANDWRITTEN ANSWERS)
 
-You are an OCR system. Your job is to read the text and convert it to human-readable mathematical notation.
+You are a high-accuracy OCR agent. Capture the ENTIRE written work as plain text, preserving structure.
 
-CONVERT TO HUMAN-READABLE FORMAT:
-- \( \sqrt{} \) → √ (square root symbol)
-- \( \arcsin \) → arcsin (inverse sine)
-- \( \arccos \) → arccos (inverse cosine)
-- \( \sin^{-1} \) → arcsin (inverse sine)
-- \( \cos^{-1} \) → arccos (inverse cosine)
-- \( \frac{dy}{dx} \) → dy/dx (derivative)
-- \( \frac{}{} \) → / (fraction bar)
-- \( x^2 \) → x² (superscript)
-- \( x_2 \) → x₂ (subscript)
-- Remove all backslashes \( \) and dollar signs
-- Convert LaTeX to plain mathematical notation
-- Make it easy for humans to read
+STRICT RULES
+- Preserve ALL content and line breaks; do not omit steps before or after equations; never summarize.
+- Keep numbering/bullets exactly as written (e.g., "(i)", "(a)", "1.", "Q4"). Do not renumber or merge lines.
+- Preserve math faithfully with readable inline notation: sqrt(), abs(), d/dx, ∫, Σ, Π, lim, |x|, ^ for powers, / for fractions, parentheses for grouping.
+- Convert LaTeX-like tokens to readable math (e.g., \\frac{dy}{dx} -> d/dx, \\sqrt{x} -> sqrt(x)). Remove LaTeX backslashes and $.
+- Keep symbols like →, ≈, ≤, ≥ when present; if unclear, use ->.
+- If any token is unreadable, write [illegible]; do not invent content.
+- If diagrams/figures exist, write [diagram] on its own line; for tables, transcribe cell text line by line.
+- Keep the original language. No commentary, no extra instructions.
 
-EXAMPLE CONVERSION:
-- \( x = \sqrt{\arcsin t} \) → x = √(arcsin t)
-- \( y = \sqrt{\arccos t} \) → y = √(arccos t)
-- \( \frac{dy}{dx} = -\frac{y}{x} \) → dy/dx = -y/x
-
-DO NOT:
-- Say you cannot extract text
-- Provide formatting instructions
-- Give examples
-- Explain what you can do
-- Keep LaTeX notation
-
-Output only the human-readable mathematical text. Nothing else."""
+OUTPUT FORMAT
+- Plain text only with original line breaks. No JSON. No markdown. No headings."""
 
 # Sidebar for prompt editing
 with st.sidebar:
@@ -192,37 +177,22 @@ with st.sidebar:
     
     # Force reset OCR prompt
     if st.button("🔄 Force Reset OCR Prompt"):
-        st.session_state.ocr_prompt = """TRANSCRIBE THE TEXT FROM THIS IMAGE AND CONVERT TO HUMAN-READABLE MATHEMATICAL NOTATION.
+        st.session_state.ocr_prompt = """TRANSCRIBE ALL VISIBLE TEXT EXACTLY (FOCUS: COMPLETE HANDWRITTEN ANSWERS)
 
-You are an OCR system. Your job is to read the text and convert it to human-readable mathematical notation.
+You are a high-accuracy OCR agent. Capture the ENTIRE written work as plain text, preserving structure.
 
-CONVERT TO HUMAN-READABLE FORMAT:
-- \( \sqrt{} \) → √ (square root symbol)
-- \( \arcsin \) → arcsin (inverse sine)
-- \( \arccos \) → arccos (inverse cosine)
-- \( \sin^{-1} \) → arcsin (inverse sine)
-- \( \cos^{-1} \) → arccos (inverse cosine)
-- \( \frac{dy}{dx} \) → dy/dx (derivative)
-- \( \frac{}{} \) → / (fraction bar)
-- \( x^2 \) → x² (superscript)
-- \( x_2 \) → x₂ (subscript)
-- Remove all backslashes \( \) and dollar signs
-- Convert LaTeX to plain mathematical notation
-- Make it easy for humans to read
+STRICT RULES
+- Preserve ALL content and line breaks; do not omit steps before or after equations; never summarize.
+- Keep numbering/bullets exactly as written (e.g., "(i)", "(a)", "1.", "Q4"). Do not renumber or merge lines.
+- Preserve math faithfully with readable inline notation: sqrt(), abs(), d/dx, ∫, Σ, Π, lim, |x|, ^ for powers, / for fractions, parentheses for grouping.
+- Convert LaTeX-like tokens to readable math (e.g., \\frac{dy}{dx} -> d/dx, \\sqrt{x} -> sqrt(x)). Remove LaTeX backslashes and $.
+- Keep symbols like →, ≈, ≤, ≥ when present; if unclear, use ->.
+- If any token is unreadable, write [illegible]; do not invent content.
+- If diagrams/figures exist, write [diagram] on its own line; for tables, transcribe cell text line by line.
+- Keep the original language. No commentary, no extra instructions.
 
-EXAMPLE CONVERSION:
-- \( x = \sqrt{\arcsin t} \) → x = √(arcsin t)
-- \( y = \sqrt{\arccos t} \) → y = √(arccos t)
-- \( \frac{dy}{dx} = -\frac{y}{x} \) → dy/dx = -y/x
-
-DO NOT:
-- Say you cannot extract text
-- Provide formatting instructions
-- Give examples
-- Explain what you can do
-- Keep LaTeX notation
-
-Output only the human-readable mathematical text. Nothing else."""
+OUTPUT FORMAT
+- Plain text only with original line breaks. No JSON. No markdown. No headings."""
         st.success("✅ OCR prompt force reset!")
         st.rerun()
     
@@ -529,7 +499,13 @@ def convert_pdf_to_images(file):
         return []
 
 def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test_id, student_id):
-    """Regenerate OCR for a specific question using custom prompt"""
+    """Regenerate OCR for a specific question using custom prompt.
+
+    Implementation details:
+    - Determines relevant images for the question using weak heuristics; if none match, falls back to all images
+    - Sends ALL relevant images in a single API call so the model has page context and can stitch the answer
+    - Returns a list of replacements with the combined extracted text tied to each affected image_number
+    """
     try:
         # Check if API key is available
         if not OPENAI_API_KEY:
@@ -538,15 +514,15 @@ def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test
         # Validate inputs
         if not answer_images:
             return None, "No answer images provided"
-        # Find images that contain this question
+        # Find images that contain this question (fallback to all if not detectable)
         relevant_images = []
         for answer in answer_images:
             if answer.get('extracted_text'):
                 if f"{question_num}." in answer['extracted_text'] or f"{question_num})" in answer['extracted_text']:
                     relevant_images.append(answer)
-        
+        # Fallback: if we cannot detect question markers, process all images
         if not relevant_images:
-            return None, "No relevant images found for this question"
+            relevant_images = answer_images
         
         # Use the custom prompt or default
         ocr_prompt = custom_prompt if custom_prompt else st.session_state.ocr_prompt
@@ -557,49 +533,40 @@ def regenerate_ocr_for_question(question_num, custom_prompt, answer_images, test
         if not original_images:
             return None, "Original images not found in session state"
         
-        # Call GPT for each relevant image
-        new_extractions = []
+        # Build a single batched call with all relevant images to improve stitching
+        import base64
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        content_parts = [{"type": "text", "text": ocr_prompt}]
+        image_numbers = []
         for answer in relevant_images:
-            image_index = answer["image_number"] - 1  # Convert to 0-based index
-            
+            image_index = answer["image_number"] - 1
             if image_index < len(original_images):
-                # Get the original image
-                original_image = original_images[image_index]
-                
-                # Convert image to base64 for OpenAI API
-                import base64
                 img_buffer = io.BytesIO()
-                original_image.save(img_buffer, format='PNG')
+                original_images[image_index].save(img_buffer, format='PNG')
                 img_str = base64.b64encode(img_buffer.getvalue()).decode()
-                
-                # Call GPT with the image
-                from openai import OpenAI
-                client = OpenAI(api_key=OPENAI_API_KEY)
+                content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_str}"}})
+                image_numbers.append(answer["image_number"])
                 
                 response = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": ocr_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_str}"}}
-                        ]}
-                    ],
+            messages=[{"role": "user", "content": content_parts}],
                     temperature=0.0
                 )
                 
-                new_extracted_text = response.choices[0].message.content.strip()
-                
-                new_extraction = {
-                    "image_number": answer["image_number"],
-                    "extracted_text": new_extracted_text,
-                    "character_count": len(new_extracted_text) if new_extracted_text else 0
-                }
-                new_extractions.append(new_extraction)
-            else:
-                # If original image not found, keep the existing extraction
-                new_extractions.append(answer)
-        
-        return new_extractions, "OCR regenerated successfully"
+        combined_text = response.choices[0].message.content.strip()
+
+        # Prepare replacement entries for each affected image number so callers can merge in-place
+        new_extractions = []
+        for num in image_numbers:
+            new_extractions.append({
+                "image_number": num,
+                "extracted_text": combined_text,
+                "character_count": len(combined_text)
+            })
+
+        return new_extractions, "OCR regenerated successfully (batched)"
     except Exception as e:
         error_msg = f"Error regenerating OCR: {str(e)}"
         if st.session_state.get('debug_mode', False):
@@ -665,7 +632,6 @@ Please return your analysis in JSON format:
 
 Question: {question_text}
 Student's Answer: {student_answer}
-Rubric: {rubric}
 
 Provide a detailed analysis including:
 1. Score (0 to max score)
@@ -730,86 +696,110 @@ Return your analysis in JSON format:
         return None, error_msg
 
 def extract_question_answer(extracted_answers, question_num):
-    """Intelligently extract the answer for a specific question from all extracted text"""
+    """Extract the answer span strictly from the start of the given answer number
+    up to the start of the next answer number. Uses line-anchored patterns to
+    avoid accidental mid-line matches and supports common formats like
+    "1.", "1)", "Question 1", "Q1".
+    """
     if not extracted_answers:
         return ""
     
-    # Combine all extracted text
-    all_text = ""
+    # Combine all extracted text and normalize newlines/whitespace
+    all_text_parts = []
     for answer in extracted_answers:
-        if answer.get('extracted_text'):
-            all_text += f"\n{answer['extracted_text']}\n"
-    
-    # Debug: Show what text we're working with
-    if st.session_state.get('debug_mode', False):
-        st.write(f"Debug: All extracted text for Q{question_num}:")
-        st.text_area(f"Debug: Full Text", all_text, height=100, disabled=True)
-    
-    # Define patterns to find question boundaries
-    question_patterns = [
-        rf"{question_num}\.\s*",  # "1. "
-        rf"{question_num}\)\s*",  # "1) "
-        rf"Question\s*{question_num}\s*",  # "Question 1"
-        rf"Q{question_num}\s*",  # "Q1"
-        rf"{question_num}\s*",  # "1 " (just the number)
-    ]
-    
-    # Find the start of the target question
-    start_pos = -1
-    for pattern in question_patterns:
-        match = re.search(pattern, all_text, re.IGNORECASE)
-        if match:
-            start_pos = match.start()
-            if st.session_state.get('debug_mode', False):
-                st.write(f"Debug: Found question {question_num} with pattern: {pattern}")
+        text = answer.get("extracted_text") or ""
+        if not isinstance(text, str):
+            continue
+        all_text_parts.append(text)
+    all_text = "\n".join(all_text_parts)
+    all_text = all_text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Helper to build a robust, line-anchored pattern for a question number
+    def build_line_anchored_pattern(n: int) -> str:
+        # Matches at the beginning of a line: optional 'Question' or 'Q', spaces, the number,
+        # followed by optional punctuation and a space. Examples:
+        # 1. , 1) , 1: , Q1 , Question 1 , Q.1 , (1) etc.
+        return (
+            rf"(?mi)^(?:\s*(?:question\s*)?q?\s*{n}\s*(?:[\.)\]:-])?\s+)"
+        )
+
+    # Find start anchored to a line
+    start_pattern = build_line_anchored_pattern(question_num)
+    start_match = re.search(start_pattern, all_text)
+    if not start_match:
+        # Fallback: previous relaxed patterns if strict anchor fails
+        relaxed_patterns = [
+            rf"{question_num}\.\s*",
+            rf"{question_num}\)\s*",
+            rf"Question\s*{question_num}\s*",
+            rf"Q{question_num}\s*",
+            rf"\b{question_num}\b",
+        ]
+        for pat in relaxed_patterns:
+            m = re.search(pat, all_text, re.IGNORECASE)
+            if m:
+                start_match = m
             break
     
-    if start_pos == -1:
-        # If no specific question pattern found, try to find any mathematical content
-        if st.session_state.get('debug_mode', False):
-            st.write(f"Debug: No specific question pattern found for Q{question_num}")
-            st.write(f"Debug: Returning all text as answer")
-        
-        # Return all text if no specific question boundaries found
+    if not start_match:
+        # If still not found, return the full text as a last resort
         return all_text.strip()
     
-    # Find the end of this question (start of next question or end of text)
-    end_pos = len(all_text)
-    next_question_patterns = [
-        rf"{question_num + 1}\.\s*",  # "2. "
-        rf"{question_num + 1}\)\s*",  # "2) "
-        rf"Question\s*{question_num + 1}\s*",  # "Question 2"
-        rf"Q{question_num + 1}\s*",  # "Q2"
-        rf"{question_num + 1}\s*",  # "2 " (just the number)
-    ]
-    
-    for pattern in next_question_patterns:
-        match = re.search(pattern, all_text[start_pos:], re.IGNORECASE)
-        if match:
-            end_pos = start_pos + match.start()
-            if st.session_state.get('debug_mode', False):
-                st.write(f"Debug: Found end of question {question_num} with pattern: {pattern}")
+    start_pos = start_match.start()
+
+    # Find the next question start anchored to a line
+    next_pattern = build_line_anchored_pattern(question_num + 1)
+    next_match = re.search(next_pattern, all_text[start_pos:])
+    if next_match:
+        end_pos = start_pos + next_match.start()
+    else:
+        # If not found, search relaxed next markers
+        relaxed_next_patterns = [
+            rf"{question_num + 1}\.\s*",
+            rf"{question_num + 1}\)\s*",
+            rf"Question\s*{question_num + 1}\s*",
+            rf"Q{question_num + 1}\s*",
+            rf"\b{question_num + 1}\b",
+        ]
+        end_pos = len(all_text)
+        for pat in relaxed_next_patterns:
+            m = re.search(pat, all_text[start_pos:], re.IGNORECASE)
+            if m:
+                end_pos = start_pos + m.start()
             break
     
-    # Extract the question answer
-    question_answer = all_text[start_pos:end_pos].strip()
-    
-    # Clean up the answer
-    lines = question_answer.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        line = line.strip()
-        if line:
-            cleaned_lines.append(line)
-    
-    final_answer = '\n'.join(cleaned_lines)
-    
-    # Debug: Show the extracted answer
-    if st.session_state.get('debug_mode', False):
-        st.write(f"Debug: Extracted answer for Q{question_num}:")
-        st.text_area(f"Debug: Answer", final_answer, height=100, disabled=True)
+    # Slice and clean
+    span = all_text[start_pos:end_pos]
+    # Trim leading/trailing blank lines but keep internal structure
+    lines = [ln.rstrip() for ln in span.split("\n")]
+    # Drop obvious scanning noise lines that are empty after stripping
+    cleaned_lines = [ln for ln in lines if ln.strip() != ""]
+    final_answer = "\n".join(cleaned_lines).strip()
+
+    if st.session_state.get("debug_mode", False):
+        st.write(f"Debug: start_pos={start_pos}, end_pos={end_pos}, length={len(final_answer)}")
+        st.text_area(f"Debug: Extracted Answer Q{question_num}", final_answer, height=120, disabled=True)
     
     return final_answer
+
+def get_current_answer_for_question(submission: dict, question_num: int) -> str:
+    """Return the best-current answer text for a question.
+
+    Preference order:
+    1) Manually edited override stored in submission['answer_overrides']
+    2) Text extracted from images in submission['extracted_answers']
+    """
+    if not submission:
+        return ""
+
+    overrides = submission.get('answer_overrides') or {}
+    # Support both str and int keys gracefully
+    override_val = overrides.get(str(question_num)) or overrides.get(question_num)
+    if isinstance(override_val, str) and override_val.strip():
+        return override_val.strip()
+
+    extracted_answers = submission.get('extracted_answers', [])
+    return extract_question_answer(extracted_answers, question_num)
 
 def extract_text_from_image(image, custom_prompt=None):
     """Extract text from image using GPT-4o OCR with human-readable formatting"""
@@ -826,13 +816,10 @@ def extract_text_from_image(image, custom_prompt=None):
         # Use custom prompt if provided, otherwise use the session state OCR prompt
         ocr_prompt = custom_prompt if custom_prompt else st.session_state.ocr_prompt
         
-        # Debug: Show the actual OCR prompt being used (optional)
+        # Show the OCR prompt only in debug mode to avoid UI spam during loops
         if st.session_state.get('debug_mode', False):
-            st.subheader("🔍 Debug: OCR Prompt Being Used")
-            st.text_area("OCR Prompt", ocr_prompt, height=150, disabled=True)
-        
-        # Always show the OCR prompt being used (for debugging)
-        st.info(f"🔍 Using OCR prompt: {ocr_prompt[:100]}...")
+            st.info(f"🔍 Using OCR prompt: {ocr_prompt[:100]}...")  
+            st.text_area("OCR Prompt", ocr_prompt, height=120, disabled=True)
         
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -847,6 +834,277 @@ def extract_text_from_image(image, custom_prompt=None):
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"GPT-4o OCR failed: {str(e)}"
+
+def extract_topics_from_rubric(rubric_text: str) -> list:
+    """Parse rubric text to produce a list of topics.
+
+    Splits on lines and commas; removes numbering; drops duplicates and tiny tokens.
+    """
+    if not rubric_text:
+        return []
+    candidates = []
+    for raw_line in rubric_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^\s*(\d+\.|\d+\)|-\s+|•\s+)", "", line)
+        parts = [p.strip() for p in re.split(r",|;|/", line) if p.strip()]
+        candidates.extend(parts if parts else [line])
+    seen = set()
+    topics = []
+    for c in candidates:
+        norm = re.sub(r"\s+", " ", c).strip()
+        if len(norm) < 3:
+            continue
+        key = norm.lower()
+        if key not in seen:
+            seen.add(key)
+            topics.append(norm)
+    return topics
+
+def analyze_topic_coverage(topics: list, questions: list, extracted_answers: list) -> list:
+    """Return coverage per topic using simple keyword presence checks."""
+    question_text_blob = "\n".join([(q[1] if len(q) >= 2 else str(q)) for q in (questions or [])]).lower()
+    answers_blob = "\n".join([a.get('extracted_text', '') for a in (extracted_answers or [])]).lower()
+    results = []
+    for topic in topics:
+        t = topic.lower()
+        in_questions = t in question_text_blob
+        in_answers = t in answers_blob
+        if in_questions and in_answers:
+            status = "✅ Covered"
+        elif in_questions and not in_answers:
+            status = "⚠️ Asked but not demonstrated"
+        elif (not in_questions) and in_answers:
+            status = "ℹ️ Demonstrated (not explicitly asked)"
+        else:
+            status = "❌ Missing"
+        results.append({
+            "concept": topic,
+            "in_questions": in_questions,
+            "in_answers": in_answers,
+            "status": status,
+        })
+    return results
+
+def extract_rubric_table_from_text(rubric_text: str) -> list:
+    """Extract a structured rubric table from free-form rubric text.
+
+    Returns a list of rows with the following keys:
+    - "Concept No.": int
+    - "Concept": str
+    - "Example": str
+    - "Status": str
+    """
+    if not rubric_text or len(rubric_text.strip()) == 0:
+        return []
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = f"""
+You will receive RUBRIC TEXT that may include a table or bullet list of concepts and examples.
+Extract it as a clean JSON table with columns: Concept No., Concept, Example, Status.
+Rules:
+- Number Concept No. starting from 1 in the order found
+- If Example is missing for a row, set it to ""
+- Set Status to "" for all rows (left blank for evaluation later)
+Return ONLY a JSON object of the shape:
+{{
+  "rows": [{{"Concept No.": 1, "Concept": "...", "Example": "...", "Status": ""}}, ...]
+}}
+
+RUBRIC TEXT:\n{rubric_text}
+"""
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(response.choices[0].message.content)
+        rows = data.get("rows", [])
+        # Basic sanitation
+        normalized = []
+        for idx, r in enumerate(rows, start=1):
+            normalized.append({
+                "Concept No.": int(r.get("Concept No.", idx)),
+                "Concept": str(r.get("Concept", "")).strip(),
+                "Example": str(r.get("Example", "")).strip(),
+                "Status": str(r.get("Status", "")).strip(),
+            })
+        return normalized
+    except Exception:
+        # Heuristic fallback: split by commas and newlines into concept list
+        topics = [t.strip() for t in re.split(r",|\n", rubric_text) if t.strip()]
+        return [{"Concept No.": i + 1, "Concept": t, "Example": "", "Status": ""} for i, t in enumerate(topics)]
+
+def extract_rubric_rows_from_images(images: list) -> list:
+    """Extract a full rubric table from one or more rubric images using GPT-4o.
+
+    Returns list of rows with keys: Concept No., Concept, Example, Status.
+    """
+    if not images:
+        return []
+    try:
+        import base64
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        content_parts = [{"type": "text", "text": (
+            "You are given one or more images that together contain a rubric table. "
+            "Read all the images and extract the table into JSON with rows. "
+            "Columns: 'Concept No.', 'Concept', 'Example', 'Status'. "
+            "Number rows sequentially if numbering is unclear. "
+            "Put blank string for Status. Return ONLY JSON: {\"rows\": [...]}"
+        )}]
+        for img in images:
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}})
+
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": content_parts}],
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(resp.choices[0].message.content)
+        rows = data.get("rows", [])
+        # Normalize
+        norm = []
+        for idx, r in enumerate(rows, start=1):
+            norm.append({
+                "Concept No.": int(r.get("Concept No.", idx)),
+                "Concept": str(r.get("Concept", "")).strip(),
+                "Example": str(r.get("Example", "")).strip(),
+                "Status": str(r.get("Status", "")).strip(),
+            })
+        return norm
+    except Exception:
+        return []
+
+def _status_to_score(status: str) -> int:
+    mapping = {
+        'excellent': 5,
+        'good': 4,
+        'fair': 3,
+        'poor': 2,
+        'not attempted': 1,
+        'unknown': 0,
+    }
+    return mapping.get(str(status or '').strip().lower(), 0)
+
+def _score_to_status(score: float) -> str:
+    if score >= 4.5:
+        return 'Excellent'
+    if score >= 3.5:
+        return 'Good'
+    if score >= 2.5:
+        return 'Fair'
+    if score >= 1.5:
+        return 'Poor'
+    if score > 0:
+        return 'Not Attempted'
+    return 'Unknown'
+
+def build_completed_rubric_table(rubric_rows: list, questions: list, question_analysis: list) -> list:
+    """Produce a completed rubric table with asked question numbers and implementation quality.
+
+    - asked question numbers are detected by simple substring match of topic in question text
+    - implementation is the average of the mapped statuses for the asked questions
+    """
+    # Prepare question texts map
+    qnum_to_text = {}
+    if questions:
+        for q in questions:
+            try:
+                if len(q) == 3:
+                    q_num, q_text, _ = int(q[0]), q[1].strip(), int(q[2])
+                elif len(q) == 2:
+                    q_num, q_text = int(q[0]), q[1].strip()
+                else:
+                    continue
+                qnum_to_text[q_num] = q_text
+            except Exception:
+                continue
+
+    # Prepare analysis map
+    qnum_to_status = {}
+    if question_analysis:
+        for qa in question_analysis:
+            qn = qa.get('question_number')
+            status = qa.get('status', 'Unknown')
+            if isinstance(qn, int):
+                qnum_to_status.setdefault(qn, []).append(status)
+
+    completed_rows = []
+    for row in rubric_rows or []:
+        concept = (row.get('Concept') or '').strip()
+        if not concept:
+            continue
+        matched_qnums = []
+        concept_lower = concept.lower()
+        for qn, qtext in qnum_to_text.items():
+            try:
+                if concept_lower in (qtext or '').lower():
+                    matched_qnums.append(qn)
+            except Exception:
+                continue
+        matched_qnums_sorted = sorted(set(matched_qnums))
+        asked_str = ", ".join(str(n) for n in matched_qnums_sorted) if matched_qnums_sorted else "—"
+
+        # Aggregate implementation quality
+        if matched_qnums_sorted:
+            scores = []
+            for qn in matched_qnums_sorted:
+                statuses = qnum_to_status.get(qn, [])
+                if statuses:
+                    scores.extend([_status_to_score(s) for s in statuses])
+            implementation = _score_to_status(sum(scores) / len(scores)) if scores else 'Unknown'
+        else:
+            implementation = 'Not Asked'
+
+        completed = dict(row)
+        completed["Asked in Questions"] = asked_str
+        completed["Implementation"] = implementation
+        completed_rows.append(completed)
+
+    return completed_rows
+
+def generate_rubric_summary_table(rubric_table_rows: list) -> list:
+    """Ask the model for a short, teacher-friendly summary table.
+
+    Output columns: Concept, Summary, Action.
+    """
+    if not rubric_table_rows:
+        return []
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = {
+            "instruction": "Convert the rubric evaluation rows into a concise teacher-facing summary table.",
+            "columns": ["Concept", "Summary", "Action"],
+            "rows": rubric_table_rows,
+        }
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": json.dumps(prompt)}],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(response.choices[0].message.content)
+        return data.get("rows", [])
+    except Exception:
+        # Fallback: generate a naive summary
+        rows = []
+        for r in rubric_table_rows:
+            rows.append({
+                "Concept": r.get("Concept", ""),
+                "Summary": f"Asked in Q: {r.get('Asked in Questions', '—')}, Implementation: {r.get('Implementation', 'Unknown')}",
+                "Action": "Focus practice on weak/unknown concepts."
+            })
+        return rows
 
 def save_extracted_content(test_title, student_name, question_text, rubric, answer_images, question_analysis, final_score, summary_data=None):
     """Save all extracted content to a comprehensive DOC file"""
@@ -945,25 +1203,7 @@ def save_extracted_content(test_title, student_name, question_text, rubric, answ
         else:
             doc.add_paragraph("No question text available")
         
-        # Rubric
-        doc.add_heading('Grading Rubric', level=1)
-        if rubric:
-            # Format rubric text properly
-            rubric_lines = rubric.split('\n')
-            for line in rubric_lines:
-                line = line.strip()
-                if line:
-                    # Check if it's a main topic (starts with capital letter and contains comma)
-                    if ',' in line and line[0].isupper():
-                        # Split by commas and format as bullet points
-                        topics = [topic.strip() for topic in line.split(',')]
-                        for topic in topics:
-                            if topic:
-                                doc.add_paragraph(f"• {topic}", style='List Bullet')
-                    else:
-                        doc.add_paragraph(line)
-        else:
-            doc.add_paragraph("No rubric available")
+        # Rubric omitted in report per configuration
         
         # Extracted Answers
         doc.add_heading('Student Answers (Extracted from Images)', level=1)
@@ -1176,7 +1416,7 @@ def _generate_summary_with_gpt4o(full_analysis, rubric):
     # Use the session state summary prompt
     prompt = st.session_state.summary_prompt.format(
         full_analysis=json.dumps(full_analysis, indent=2),
-        rubric=rubric
+        rubric=""
     )
     
     # Debug: Show the actual summary prompt being used (optional)
@@ -1336,7 +1576,7 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
     final_analysis = {"total_score": final_percentage, "question_analysis": question_analysis}
 
     progress_bar.progress(0.8, text="Generating comprehensive analysis...")
-    summary_data = _generate_summary_with_gpt4o(final_analysis, rubric)
+    summary_data = _generate_summary_with_gpt4o(final_analysis, "")
     final_analysis.update(summary_data)
     
     # Save extracted content to file
@@ -1345,7 +1585,7 @@ def grade_handwritten_submission_with_gpt4o(question_text, answer_images, rubric
         test_title=test_title,
         student_name="Student",  # This will be updated when we have student info
         question_text=question_text,
-        rubric=rubric,
+        rubric="",
         answer_images=answer_images,
         question_analysis=question_analysis,
         final_score=final_percentage,
@@ -1367,52 +1607,61 @@ with st.expander("➕ Add a New Test", expanded=True):
         st.write("Define the test details, rubric, and upload the question paper.")
         test_title = st.text_input("Test Title", "Differentiation Test 2")
         test_date = st.date_input("Test Date")
-        rubric_option = st.radio("Rubric Source:", ("Enter Text Manually", "Upload PDF Lesson Plan"))
-        if rubric_option == "Enter Text Manually":
-            test_rubric = st.text_area("Topics / Grading Rubric", "Parametric Equations, Second-Order Derivatives, Implicit Differentiation, Chain Rule")
-        else:
-            rubric_files = st.file_uploader("Upload Rubric", type=["pdf", "png", "jpg", "jpeg"], key="rubric_uploader", help="Upload PDF or image files containing the rubric")
-            if rubric_files:
-                # Handle single file upload (rubric_files is a single UploadedFile, not a list)
-                if rubric_files.type == "application/pdf":
-                    test_rubric = extract_text_from_pdf(rubric_files)
-                elif rubric_files.type.startswith("image/"):
-                    # For single image, extract text using GPT-4o OCR
-                    image = Image.open(rubric_files)
-                    test_rubric = extract_text_from_image(image)
-                    if not test_rubric or test_rubric.startswith("GPT-4o OCR failed"):
-                        test_rubric = "Rubric uploaded as image. Please ensure the rubric is clearly visible in the image."
-                else:
-                    test_rubric = ""
-            else:
-                test_rubric = ""
-        question_paper_files = st.file_uploader("Upload Question Paper", type=["pdf", "png", "jpg", "jpeg"], key="question_uploader", help="Upload PDF or image files containing the question paper")
+        # Rubric input (PDF or image)
+        rubric_upload = st.file_uploader("Upload Rubric (PDF or image)", type=["pdf", "png", "jpg", "jpeg"], key="rubric_uploader")
+        question_paper_file = st.file_uploader("Upload Question Paper", type=["pdf", "png", "jpg", "jpeg"], key="question_uploader", help="Upload PDF or image files containing the question paper")
         submitted = st.form_submit_button("Create Test")
-        if submitted and all([test_title, test_date, test_rubric, question_paper_files]):
-            # Handle single file upload (question_paper_files is a single UploadedFile, not a list)
-            if question_paper_files.type == "application/pdf":
-                question_text = extract_text_from_pdf(question_paper_files)
-            elif question_paper_files.type.startswith("image/"):
-                # For single image, extract text using GPT-4o OCR
-                image = Image.open(question_paper_files)
-                
+        if submitted:
+            # Extract rubric text from upload, if provided
+            test_rubric = ""
+            rubric_images = []
+            if rubric_upload is not None:
+                mime = getattr(rubric_upload, 'type', '') or ''
+                name = getattr(rubric_upload, 'name', '') or ''
+                is_pdf = (mime == "application/pdf") or name.lower().endswith(".pdf")
+                try:
+                    if is_pdf:
+                        # We need two passes: text and images for later OCR regeneration
+                        test_rubric = extract_text_from_pdf(rubric_upload) or ""
+                        try:
+                            rubric_upload.seek(0)
+                        except Exception:
+                            pass
+                        imgs = convert_pdf_to_images(rubric_upload)
+                        rubric_images = imgs or []
+                    elif mime.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg")):
+                        image = Image.open(rubric_upload)
+                        test_rubric = extract_text_from_image(image) or ""
+                        rubric_images = [image]
+                except Exception as e:
+                    st.error(f"Rubric extraction failed: {e}")
 
-                
-                # Use the updated OCR prompt for question paper extraction
-                question_text = extract_text_from_image(image)
-                
+            # Resolve question paper text
+            question_text = ""
+            if question_paper_file is not None:
+                qp_mime = getattr(question_paper_file, 'type', '') or ''
+                qp_name = getattr(question_paper_file, 'name', '') or ''
+                if qp_mime == "application/pdf" or qp_name.lower().endswith('.pdf'):
+                    question_text = extract_text_from_pdf(question_paper_file) or ""
+                elif qp_mime.startswith("image/") or qp_name.lower().endswith((".png", ".jpg", ".jpeg")):
+                    image = Image.open(question_paper_file)
+                    question_text = extract_text_from_image(image) or ""
                 if not question_text or question_text.startswith("GPT-4o OCR failed"):
-                    question_text = "Question paper uploaded as image. Please ensure all questions are clearly visible in the image."
+                        question_text = "Question paper uploaded as image. Please ensure all questions are clearly visible."
             else:
-                question_text = ""
-            
+                    st.error("Unsupported question paper file type. Please upload a PDF or image.")
+
+            # Validate
+            if not test_title:
+                st.error("Please enter a test title.")
+            if not test_date:
+                st.error("Please select a test date.")
+            # Rubric optional
+            if not question_text:
+                st.error("Question paper is required (PDF or image).")
 
             # Display extracted question text
             if question_text:
-                st.subheader("📄 Extracted Question Paper Text:")
-                st.text_area("Question Content", question_text, height=200, disabled=True)
-                st.info(f"✅ Successfully extracted {len(question_text)} characters from question paper")
-                
                 # Parse and display individual questions with multiple patterns
                 questions = []
                 
@@ -1477,9 +1726,7 @@ with st.expander("➕ Add a New Test", expanded=True):
                         st.success(f"✅ Created {len(questions)} manual questions")
                 
                 if questions:
-                    st.subheader("📋 Individual Questions:")
-                    st.info(f"✅ Successfully parsed {len(questions)} questions from question paper")
-                    
+                    # Removed detailed 'Individual Questions' preview section in Create Test
                     # Store questions in session state for persistent display and grading
                     # Use a sanitized key to avoid issues with special characters
                     sanitized_title = test_title.replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
@@ -1516,17 +1763,19 @@ with st.expander("➕ Add a New Test", expanded=True):
             else:
                 st.error("❌ Failed to extract text from question paper")
             
-            # Display extracted rubric text
-            if test_rubric:
-                st.subheader("📋 Extracted Rubric Text:")
-                st.text_area("Rubric Content", test_rubric, height=150, disabled=True)
-                st.info(f"✅ Successfully extracted {len(test_rubric)} characters from rubric")
-            else:
-                st.error("❌ Failed to extract text from rubric")
+            # Removed inline rubric preview section; rubric will be shown in the test's question view
             
-            if question_text and test_rubric:
-                new_test = {"id": f"test_{len(st.session_state.tests) + 1}", "title": test_title, "date": str(test_date), "rubric": test_rubric, "question_text": question_text}
+            if question_text:
+                new_test = {"id": f"test_{len(st.session_state.tests) + 1}", "title": test_title, "date": str(test_date), "rubric": test_rubric or "", "question_text": question_text}
                 st.session_state.tests.append(new_test)
+                # Persist rubric images and parsed rows for later per-concept OCR/edits
+                try:
+                    parsed_rows = extract_rubric_table_from_text(test_rubric) if (test_rubric and len(test_rubric) > 0) else []
+                    st.session_state[f"rubric_rows_{new_test['id']}"] = parsed_rows
+                except Exception:
+                    st.session_state[f"rubric_rows_{new_test['id']}"] = []
+                if rubric_images:
+                    st.session_state[f"rubric_images_{new_test['id']}"] = rubric_images
                 st.success(f"Test '{test_title}' created!")
         elif submitted:
             st.warning("Please fill out all fields and upload required files.")
@@ -1549,15 +1798,65 @@ if st.session_state.tests:
             with st.expander(f"📝 {test['title']} - Questions & OCR Settings", expanded=True):
                 st.info(f"Configure individual OCR prompts for each question in {test['title']}")
                 
-                # Add explanation of what each section does
-                with st.container(border=True):
-                    st.markdown("**📋 What Each Section Does:**")
-                    st.markdown("""
-                    - **Question Text**: The actual question students will answer (you can edit this)
-                    - **OCR Prompt**: Instructions for extracting question text from question paper images
-                    - **🔄 Regenerate Question**: Use custom OCR prompt to re-extract a specific question from the question paper
-                    - **Test OCR**: Upload sample question paper images to see how your OCR prompts work
-                    """)
+                # Rubric display as table (if we have extracted rubric text)
+                if test.get('rubric'):
+                    # Use cached parsed rows if present, else parse
+                    cached_rows_key = f"rubric_rows_{test['id']}"
+                    rubric_rows = st.session_state.get(cached_rows_key)
+                    if not rubric_rows:
+                        # Prefer image-based full extraction if we have rubric images
+                        rub_imgs_key = f"rubric_images_{test['id']}"
+                        available_imgs = st.session_state.get(rub_imgs_key, [])
+                        rubric_rows = extract_rubric_rows_from_images(available_imgs)
+                    if not rubric_rows:
+                        rubric_rows = extract_rubric_table_from_text(test['rubric'])
+                    st.session_state[cached_rows_key] = rubric_rows
+                    if rubric_rows:
+                        st.markdown("**Rubric (editable)**")
+                        # In-place editable table for the rubric
+                        import pandas as pd
+                        editor_key = f"rubric_editor_{test['id']}"
+                        df = pd.DataFrame(rubric_rows)
+                        edited_df = st.data_editor(
+                            df,
+                            use_container_width=True,
+                            num_rows="dynamic",
+                            column_config={
+                                "Concept No.": st.column_config.NumberColumn("Concept No.", step=1, help="Sequential concept number"),
+                                "Concept": st.column_config.TextColumn("Concept", help="Short concept title"),
+                                "Example": st.column_config.TextColumn("Example", help="Brief example or formula"),
+                                "Status": st.column_config.TextColumn("Status", help="Optional status/notes"),
+                            },
+                            key=editor_key,
+                        )
+
+                        cols = st.columns(3)
+                        if cols[0].button("💾 Save Rubric", key=f"save_rubric_table_{test['id']}"):
+                            # Persist edited rows back to session with clean numbering/types
+                            rows = edited_df.to_dict(orient='records') if hasattr(edited_df, 'to_dict') else edited_df
+                            cleaned = []
+                            for idx, r in enumerate(rows, start=1):
+                                cleaned.append({
+                                    "Concept No.": int(r.get("Concept No.") or idx),
+                                    "Concept": str(r.get("Concept", "")).strip(),
+                                    "Example": str(r.get("Example", "")).strip(),
+                                    "Status": str(r.get("Status", "")).strip(),
+                                })
+                            st.session_state[cached_rows_key] = cleaned
+                            st.success("Rubric saved.")
+
+                        if cols[1].button("↩️ Reset", key=f"reset_rubric_table_{test['id']}"):
+                                    fresh = extract_rubric_table_from_text(test['rubric'])
+                                    st.session_state[cached_rows_key] = fresh
+                                    st.success("Reset to parsed rubric.")
+
+                        if cols[2].button("➕ Add 5 Rows", key=f"add_rows_rubric_{test['id']}"):
+                            # Extend with blank rows for convenience
+                            rows = edited_df.to_dict(orient='records') if hasattr(edited_df, 'to_dict') else rubric_rows
+                            for _ in range(5):
+                                rows.append({"Concept No.": None, "Concept": "", "Example": "", "Status": ""})
+                            st.session_state[cached_rows_key] = rows
+                            st.rerun()
                 
 
                 
@@ -1600,17 +1899,36 @@ if st.session_state.tests:
                         with col2:
                             # Individual OCR prompt for each question
                             st.markdown("**OCR Prompt:**")
-                            default_ocr_prompt = f"TRANSCRIBE QUESTION {q_num} FROM THIS IMAGE. Output only the question text you see. The question is: {q_text[:100]}..."
-                            stored_prompt = st.session_state.get(f"custom_ocr_prompt_{sanitized_title}_{q_num}", default_ocr_prompt)
+                            default_ocr_prompt = (
+                "You are an elite OCR agent for handwritten STEM exams. "
+                f"Extract EXACTLY the problem statement for Question {q_num} from the provided image(s). "
+                "Be robust to noise, skew, shadows, and writing styles.\n\n"
+                "Rules:\n"
+                "- Output: plain text only. No preface, no extra lines.\n"
+                "- Scope: include only the question text and any labeled subparts ((a), (b), ...). Ignore unrelated headers/footers.\n"
+                "- Math fidelity: preserve all math. Use readable inline forms: ∫, Σ, Π, d/dx, lim, |x|, sqrt(), ^ for exponent, / for fractions, () for grouping.\n"
+                "- Structure: keep original line breaks and indentation for subparts.\n"
+                "- Normalization: unify symbols when ambiguous: '*' for multiplication, '^' for powers, '/' for rational forms.\n"
+                "- Error handling: never invent content. If unreadable, write '[illegible]'. If a symbol is ambiguous, choose the most likely and add the alternative in brackets, e.g., 'x^2 [or x^z]'.\n"
+                "- Cleanup: remove page numbers, watermarks, and scribbles. Expand common abbreviations when unambiguous (e.g., 'w.r.t.' -> 'with respect to').\n"
+                "- Language: keep the original language.\n\n"
+                f"Context hint (first 120 chars of parsed text): {q_text[:120]}"
+                            )
+                            stored_prompt = st.session_state.get(
+                                f"custom_ocr_prompt_{sanitized_title}_{q_num}",
+                                default_ocr_prompt,
+                            )
                             custom_ocr_prompt = st.text_area(
                                 f"OCR Prompt for Q{q_num}",
                                 value=stored_prompt,
                                 height=120,
                                 key=f"persistent_ocr_prompt_{test_idx}_{sanitized_title}_{q_num}",
-                                help=f"Custom OCR prompt for extracting Question {q_num} from question paper images"
+                                help=f"Custom OCR prompt for extracting Question {q_num} from question paper images",
                             )
                             # Store the custom OCR prompt
-                            st.session_state[f"custom_ocr_prompt_{sanitized_title}_{q_num}"] = custom_ocr_prompt
+                            st.session_state[
+                                f"custom_ocr_prompt_{sanitized_title}_{q_num}"
+                            ] = custom_ocr_prompt
                             
                             # Simple regenerate button that modifies the existing text
                             if st.button("🔄 Regenerate Question", key=f"regenerate_question_{test_idx}_{sanitized_title}_{q_num}"):
@@ -1857,8 +2175,8 @@ else:
                                         if extracted_answers:
                                             st.markdown("**Complete Student Answer (Extracted from Images):**")
                                             
-                                            # Intelligent question answer extraction
-                                            relevant_text = extract_question_answer(extracted_answers, q_num)
+                                            # Intelligent question answer extraction (respects overrides)
+                                            relevant_text = get_current_answer_for_question(submission, q_num)
                                             
                                             if relevant_text.strip():
                                                 col1, col2 = st.columns([4, 1])
@@ -1868,20 +2186,62 @@ else:
                                                     if st.button("✏️ Edit Answer", key=f"edit_answer_{test['id']}_{student['id']}_{q_num}"):
                                                         st.session_state[f"editing_answer_{test['id']}_{student['id']}_{q_num}"] = True
                                                 
-                                                # Regenerate OCR for this question
-                                                if st.button("🔄 Regenerate OCR", key=f"regenerate_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                # Regenerate OCR for this question (answers) immediately using stored/default prompt
+                                                if st.button("🔄 Regenerate Answer OCR", key=f"regenerate_answer_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                    # Resolve prompt to use (persisted per test/student/question)
+                                                    ocr_prompt_key = f"ocr_prompt_answer_{test['id']}_{student['id']}_{q_num}"
+                                                    default_answer_ocr_prompt = (
+                                                        "You are an elite OCR agent for handwritten exam answers. "
+                                                        f"Extract the COMPLETE student answer for Question {q_num} from the provided image(s).\n\n"
+                                                        "BOUNDARIES\n"
+                                                        f"- START: the first line that begins with the answer number for Q{q_num} (e.g., '{q_num}.', '{q_num})', 'Q{q_num}', '(" + str(q_num) + ")').\n"
+                                                        "- END: the first line that begins with the next answer number (Q{n+1}) — do NOT include that next number. If not found, end at the final line of the image set.\n\n"
+                                                        "RULES\n"
+                                                        "- Preserve ALL content and original line breaks. Capture steps before and after equations; do not summarize.\n"
+                                                        "- Preserve math faithfully using readable inline forms: sqrt(), abs(), d/dx, ∫, Σ, Π, lim, |x|, ^ for powers, / for fractions, parentheses for grouping.\n"
+                                                        "- Convert LaTeX tokens to readable math (e.g., \\frac{dy}{dx} -> d/dx, \\sqrt{x} -> sqrt(x)). Remove LaTeX backslashes and $.\n"
+                                                        "- Ignore clearly crossed-out work only if fully struck; minor strike-offs should not erase valid surrounding content.\n"
+                                                        "- If unreadable, use [illegible]. Do not invent content.\n"
+                                                        "- Output plain text only; no headers, no labels, no JSON."
+                                                    )
+                                                    effective_prompt = st.session_state.get(ocr_prompt_key, default_answer_ocr_prompt)
+                                                    with st.spinner("🔄 Regenerating OCR for answers..."):
+                                                        new_extractions, message = regenerate_ocr_for_question(
+                                                            q_num, effective_prompt, extracted_answers, test['id'], student['id']
+                                                        )
+                                                        if new_extractions:
+                                                            submission['extracted_answers'] = new_extractions
+                                                            st.success(f"Answer OCR regenerated. {message}")
+                                                        else:
+                                                            st.error(f"Failed to regenerate OCR: {message}")
+                                                    st.rerun()
+
+                                                # Advanced: open UI to customize OCR prompt and run
+                                                if st.button("⚙️ Custom Answer OCR", key=f"open_custom_answer_ocr_{test['id']}_{student['id']}_{q_num}"):
                                                     st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = True
                                                 
-                                                # OCR regeneration interface
+                                                # OCR regeneration interface (customization panel)
                                                 if st.session_state.get(f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}", False):
                                                     st.markdown("**🔄 Regenerate OCR for Question {q_num}**")
                                                     
-                                                    # Custom OCR prompt for this question
-                                                    custom_ocr_prompt = st.text_area(
-                                                        f"Custom OCR Prompt for Q{q_num}",
-                                                        value=f"Extract and format the student's answer for Question {q_num} from this image. Focus on mathematical notation and ensure accuracy.",
-                                                        height=100,
-                                                        key=f"ocr_prompt_{test['id']}_{student['id']}_{q_num}"
+                                                    # Custom OCR prompt for this question's answers
+                                                    # Persist per test/student/question under session_state
+                                                    ocr_prompt_key = f"ocr_prompt_answer_{test['id']}_{student['id']}_{q_num}"
+                                                    default_answer_ocr_prompt = f"Extract the student's full answer for Question {q_num} from this image. Preserve math structure, convert LaTeX to readable math, remove crossed-out work, and keep steps order."
+                                                    current_prompt_val = st.session_state.get(ocr_prompt_key, default_answer_ocr_prompt)
+                                                    # IMPORTANT: Do not set session_state here; just control the widget's initial value
+                                                    if ocr_prompt_key in st.session_state:
+                                                        custom_ocr_prompt = st.text_area(
+                                                            f"Custom Answer OCR Prompt for Q{q_num}",
+                                                            height=120,
+                                                            key=ocr_prompt_key
+                                                        )
+                                                    else:
+                                                        custom_ocr_prompt = st.text_area(
+                                                            f"Custom Answer OCR Prompt for Q{q_num}",
+                                                            value=default_answer_ocr_prompt,
+                                                            height=120,
+                                                            key=ocr_prompt_key
                                                     )
                                                     
                                                     # Show original images for this question
@@ -1895,10 +2255,10 @@ else:
                                                                 st.text_area(f"Current OCR for Image {answer['image_number']}", answer['extracted_text'], height=150, disabled=True)
                                                     
                                                     col1, col2, col3 = st.columns(3)
-                                                    if col1.button("🔄 Regenerate with Custom Prompt", key=f"execute_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                    if col1.button("🔄 Run Custom OCR", key=f"execute_custom_answer_ocr_{test['id']}_{student['id']}_{q_num}"):
                                                         with st.spinner("🔄 Regenerating OCR with custom prompt..."):
                                                             # Get the custom prompt
-                                                            custom_prompt = st.session_state.get(f"ocr_prompt_{test['id']}_{student['id']}_{q_num}", "")
+                                                            custom_prompt = st.session_state.get(ocr_prompt_key, current_prompt_val)
                                                             
                                                             # Debug information
                                                             if st.session_state.get('debug_mode', False):
@@ -1916,9 +2276,15 @@ else:
                                                             )
                                                             
                                                             if new_extractions:
-                                                                # Update the submission with new OCR data
-                                                                submission['extracted_answers'] = new_extractions
-                                                                st.success(f"OCR regenerated successfully! {message}")
+                                                                # Merge replacements by image number
+                                                                if isinstance(submission.get('extracted_answers'), list):
+                                                                    existing = {a['image_number']: a for a in submission['extracted_answers']}
+                                                                    for ne in new_extractions:
+                                                                        existing[ne['image_number']] = ne
+                                                                    submission['extracted_answers'] = list(existing.values())
+                                                                else:
+                                                                    submission['extracted_answers'] = new_extractions
+                                                                    st.success(f"OCR regenerated successfully! {message}")
                                                                 
                                                                 # Debug: Show new extractions
                                                                 if st.session_state.get('debug_mode', False):
@@ -1930,17 +2296,22 @@ else:
                                                             
                                                             st.session_state[f"regenerating_ocr_{test['id']}_{student['id']}_{q_num}"] = False
                                                             st.rerun()
-                                                    if col2.button("✅ Use Default Prompt", key=f"default_ocr_{test['id']}_{student['id']}_{q_num}"):
+                                                    if col2.button("✅ Use Default Prompt", key=f"default_answer_ocr_run_{test['id']}_{student['id']}_{q_num}"):
                                                         with st.spinner("🔄 Regenerating OCR with default prompt..."):
-                                                            # Call the regeneration function with default prompt
                                                             new_extractions, message = regenerate_ocr_for_question(
-                                                                q_num, "", extracted_answers, test['id'], student['id']
+                                                                q_num, default_answer_ocr_prompt, extracted_answers, test['id'], student['id']
                                                             )
                                                             
                                                             if new_extractions:
-                                                                # Update the submission with new OCR data
-                                                                submission['extracted_answers'] = new_extractions
-                                                                st.success(f"OCR regenerated with default prompt! {message}")
+                                                                # Merge replacements by image number
+                                                                if isinstance(submission.get('extracted_answers'), list):
+                                                                    existing = {a['image_number']: a for a in submission['extracted_answers']}
+                                                                    for ne in new_extractions:
+                                                                        existing[ne['image_number']] = ne
+                                                                    submission['extracted_answers'] = list(existing.values())
+                                                                else:
+                                                                    submission['extracted_answers'] = new_extractions
+                                                                    st.success(f"OCR regenerated with default prompt! {message}")
                                                             else:
                                                                 st.error(f"Failed to regenerate OCR: {message}")
                                                             
@@ -1955,6 +2326,15 @@ else:
                                                     edited_answer = st.text_area("Edit Student Answer", relevant_text.strip(), height=300, key=f"edit_answer_text_{test['id']}_{student['id']}_{q_num}")
                                                     col1, col2 = st.columns(2)
                                                     if col1.button("✅ Save Answer", key=f"save_answer_{test['id']}_{student['id']}_{q_num}"):
+                                                        # Persist manual override on the submission object
+                                                        submission_key = f"test_{test['id']}_{student['id']}"
+                                                        if 'answer_overrides' not in submission:
+                                                            submission['answer_overrides'] = {}
+                                                        submission['answer_overrides'][str(q_num)] = edited_answer.strip()
+                                                        # Mirror to global session submissions store if present
+                                                        if submission_key in st.session_state.submissions:
+                                                            st.session_state.submissions[submission_key].setdefault('answer_overrides', {})
+                                                            st.session_state.submissions[submission_key]['answer_overrides'][str(q_num)] = edited_answer.strip()
                                                         st.success("Answer updated!")
                                                         st.session_state[f"editing_answer_{test['id']}_{student['id']}_{q_num}"] = False
                                                         st.rerun()
@@ -2072,7 +2452,6 @@ else:
 
 Question: {q_text}
 Student's Answer: {relevant_text.strip() if relevant_text.strip() else "No answer provided"}
-Rubric: {test['rubric']}
 
 Please provide:
 1. A detailed score (0 to {q_max_score} points)
@@ -2109,8 +2488,8 @@ Return your analysis in JSON format with the following structure:
                                                     # Get the custom prompt
                                                     custom_prompt = st.session_state.get(f"results_prompt_{test['id']}_{student['id']}_{q_num}", "")
                                                     
-                                                    # Get current student answer
-                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    # Get current student answer (respect overrides)
+                                                    student_answer = get_current_answer_for_question(submission, q_num)
                                                     
                                                     # Call the regeneration function
                                                     new_analysis, message = regenerate_analysis_for_question(
@@ -2150,8 +2529,8 @@ Return your analysis in JSON format with the following structure:
                                                     st.rerun()
                                             if col2.button("✅ Use Default Prompt", key=f"default_results_{test['id']}_{student['id']}_{q_num}"):
                                                 with st.spinner("🔄 Generating new results with default prompt..."):
-                                                    # Get current student answer
-                                                    student_answer = extract_question_answer(extracted_answers, q_num)
+                                                    # Get current student answer (respect overrides)
+                                                    student_answer = get_current_answer_for_question(submission, q_num)
                                                     
                                                     # Call the regeneration function with default prompt
                                                     new_analysis, message = regenerate_analysis_for_question(
@@ -2352,19 +2731,24 @@ Return your analysis in JSON format with the following structure:
                                         st.write(f"**Completion:** :{completion_color}[{completion_status}]")
                         else:
                             st.caption("No question-specific analysis was generated.")
-                        st.markdown("**Performance by Concept**")
-                        rubric_analysis = submission.get('rubric_analysis', [])
-                        if rubric_analysis:
-                            for ra in rubric_analysis:
-                                with st.container(border=True):
-                                    r_col1, r_col2 = st.columns([2,1])
-                                    r_col1.write(f"**Concept:** {ra.get('concept', 'N/A')}")
-                                    r_col2.write(f"**Performance:** {ra.get('performance', 'N/A')}")
-                                    st.markdown(f"**Evidence:** {ra.get('evidence', 'No evidence provided.')}")
-                                    if ra.get('recommendations'):
-                                        st.info(f"**Recommendations:** {ra.get('recommendations')}")
+                        # Completed Rubric and Summary Tables
+                        st.markdown("**Rubric Evaluation**")
+                        cached_rows = st.session_state.get(f"rubric_rows_{test['id']}")
+                        if cached_rows:
+                            completed = build_completed_rubric_table(cached_rows, questions, submission.get('question_analysis', []))
+                            if completed:
+                                st.markdown("Completed Rubric Table")
+                                st.table(completed)
+                                st.markdown("Summary for Teacher")
+                                summary_rows = generate_rubric_summary_table(completed)
+                                if summary_rows:
+                                    st.table(summary_rows)
+                                else:
+                                    st.caption("No summary available.")
+                            else:
+                                st.caption("Rubric present, but could not compute evaluation.")
                         else:
-                             st.caption("No rubric-based analysis was generated.")
+                            st.caption("No rubric uploaded for this test.")
                         
                         # Show additional analysis if available
                         if submission.get('mathematical_thinking'):
