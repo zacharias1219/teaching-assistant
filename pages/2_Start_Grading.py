@@ -488,7 +488,8 @@ def convert_pdf_to_images(file):
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
         for page in doc:
-            pix = page.get_pixmap(dpi=150)
+            # Use higher DPI for better math OCR fidelity
+            pix = page.get_pixmap(dpi=300)
             img_bytes = pix.tobytes("png")
             image = Image.open(io.BytesIO(img_bytes))
             images.append(image)
@@ -818,7 +819,7 @@ def extract_text_from_image(image, custom_prompt=None):
         
         # Show the OCR prompt only in debug mode to avoid UI spam during loops
         if st.session_state.get('debug_mode', False):
-            st.info(f"🔍 Using OCR prompt: {ocr_prompt[:100]}...")  
+            st.info(f"🔍 Using OCR prompt: {ocr_prompt[:100]}...")
             st.text_area("OCR Prompt", ocr_prompt, height=120, disabled=True)
         
         response = client.chat.completions.create(
@@ -938,10 +939,89 @@ RUBRIC TEXT:\n{rubric_text}
         topics = [t.strip() for t in re.split(r",|\n", rubric_text) if t.strip()]
         return [{"Concept No.": i + 1, "Concept": t, "Example": "", "Status": ""} for i, t in enumerate(topics)]
 
+def parse_rubric_text_llm(rubric_text: str) -> list:
+    """Parse rubric from plain text using a single LLM call. Preserves math.
+
+    Returns list of rows with Concept No., Concept, Example, Status.
+    """
+    if not rubric_text or len(rubric_text.strip()) == 0:
+        return []
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = (
+            "You are given RUBRIC TEXT copy-pasted from a PDF containing a rubric table.\n"
+            "Reconstruct a JSON table with columns: Concept No., Concept, Example, Status.\n\n"
+            "Rules:\n"
+            "- Parse rows in order. If numbering is missing, infer sequential Concept No. starting at 1.\n"
+            "- In Example, TRANSCRIBE MATH FAITHFULLY: keep ∫, √, d/dx, Σ, Π, |x|; convert LaTeX-like tokens (\\frac{dy}{dx} -> d/dx; \\sqrt{x} -> √x; x^{2} -> x^2; x_{0} -> x_0).\n"
+            "- If multiple snippets exist (i), (ii), (iii), include ALL in one cell separated by '; '.\n"
+            "- Status should be empty string for all rows.\n"
+            "Return ONLY JSON: {\"rows\": [{\"Concept No.\": 1, \"Concept\": \"…\", \"Example\": \"…\", \"Status\": \"\"}, …]}.\n\n"
+            f"RUBRIC TEXT\n{rubric_text}"
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(resp.choices[0].message.content)
+        rows = data.get("rows", [])
+        normalized = []
+        for idx, r in enumerate(rows, start=1):
+            normalized.append({
+                "Concept No.": int(r.get("Concept No.", idx)),
+                "Concept": str(r.get("Concept", "")).strip(),
+                "Example": str(r.get("Example", "")).strip(),
+                "Status": str(r.get("Status", "")).strip(),
+            })
+        return normalized
+    except Exception:
+        return extract_rubric_table_from_text(rubric_text)
+
+def fill_missing_examples_from_text(rows: list, rubric_text: str) -> list:
+    """For rows with empty Example, ask the LLM to locate and transcribe the Example
+    cell from the rubric text. Updates and returns rows."""
+    if not rows:
+        return []
+    if not rubric_text:
+        return rows
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        for i, row in enumerate(rows):
+            if str(row.get("Example", "")).strip():
+                continue
+            concept_no = row.get("Concept No.") or (i + 1)
+            concept_name = str(row.get("Concept", "")).strip()
+            ask = (
+                "From the following rubric text, find the table row that matches the given concept number/name,\n"
+                "and output EXACTLY the Example cell text for that row.\n\n"
+                f"Target row: Concept No. = {concept_no}; Concept contains: '{concept_name[:120]}'\n\n"
+                "Rubric Text (may include the entire table as text):\n" + rubric_text + "\n\n"
+                "Rules: preserve math: ∫, √, Σ, Π, d/dx, |x|, powers ^, fractions /. Convert LaTeX-like tokens to readable math.\n"
+                "If multiple items exist (i), (ii), keep them separated by '; '.\n"
+                "Return plain text only; no quotes, no labels."
+            )
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": ask}],
+                temperature=0.0,
+            )
+            text = (resp.choices[0].message.content or "").strip().strip('"')
+            if text:
+                rows[i]["Example"] = text
+        return rows
+    except Exception:
+        return rows
 def extract_rubric_rows_from_images(images: list) -> list:
     """Extract a full rubric table from one or more rubric images using GPT-4o.
 
-    Returns list of rows with keys: Concept No., Concept, Example, Status.
+    Attempts to capture ALL columns present in the table across pages and returns
+    a list of row dicts. Known columns like 'Concept No.', 'Concept', 'Example',
+    'Status' are normalized when possible, but any additional columns found are
+    preserved as extra keys on each row.
     """
     if not images:
         return []
@@ -950,13 +1030,26 @@ def extract_rubric_rows_from_images(images: list) -> list:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
 
-        content_parts = [{"type": "text", "text": (
-            "You are given one or more images that together contain a rubric table. "
-            "Read all the images and extract the table into JSON with rows. "
-            "Columns: 'Concept No.', 'Concept', 'Example', 'Status'. "
-            "Number rows sequentially if numbering is unclear. "
-            "Put blank string for Status. Return ONLY JSON: {\"rows\": [...]}"
-        )}]
+        instruction = (
+            "You are given one or more images that together contain a rubric table.\n"
+            "Extract the ENTIRE table accurately, including ALL columns and ALL rows,\n"
+            "merging content across images if the table spans multiple pages.\n\n"
+            "Return STRICT JSON with these fields only:\n"
+            "{\n  \"columns\": [\"<header1>\", \"<header2>\", ...],\n  \"rows\": [ {\"<header1>\": \"cell\", ...}, ... ]\n}\n\n"
+            "Rules:\n"
+            "- Detect the header row; use the exact visible header text as column names.\n"
+            "- Preserve cell text faithfully (no summarization).\n"
+            "- For the 'Example' column, TRANSCRIBE MATH PRECISELY and COMPLETELY. Keep symbols: ∫, √, π, θ, Σ, Π, |x|, d/dx, lim; trig/log names.\n"
+            "  Convert LaTeX-like tokens to readable math: \\\\frac{dy}{dx} -> d/dx; \\\\sqrt{x} -> √x; x^{2} -> x^2; x_{0} -> x_0.\n"
+            "  If multiple snippets are listed (i), (ii), (iii), include ALL of them separated by '; '.\n"
+            "- If a cell is empty, use an empty string.\n"
+            "- If a cell spans multiple lines, join with a single space.\n"
+            "- If a header is missing but implied, infer a short header like 'Column X'.\n"
+            "- If the table does not have explicit numbering, do not invent numbers; leave numbering column blank.\n"
+            "- Do NOT add commentary. Output JSON object only."
+        )
+
+        content_parts = [{"type": "text", "text": instruction}]
         for img in images:
             buf = io.BytesIO()
             img.save(buf, format='PNG')
@@ -970,19 +1063,151 @@ def extract_rubric_rows_from_images(images: list) -> list:
             response_format={"type": "json_object"}
         )
         data = json.loads(resp.choices[0].message.content)
-        rows = data.get("rows", [])
-        # Normalize
-        norm = []
+
+        # Accept either {columns, rows} or legacy {rows}
+        rows = []
+        if isinstance(data, dict):
+            if "rows" in data and isinstance(data.get("rows"), list):
+                rows = data["rows"]
+
+        # Normalize best-effort for known columns while preserving extras
+        def get_first_present_key(d: dict, candidates: list, default: str = "") -> str:
+            for k in candidates:
+                if k in d and str(d.get(k)).strip() != "":
+                    return str(d.get(k))
+            return default
+
+        normalized_rows = []
         for idx, r in enumerate(rows, start=1):
-            norm.append({
-                "Concept No.": int(r.get("Concept No.", idx)),
-                "Concept": str(r.get("Concept", "")).strip(),
-                "Example": str(r.get("Example", "")).strip(),
-                "Status": str(r.get("Status", "")).strip(),
-            })
-        return norm
+            # Copy all original cells
+            row_out = {k: ("" if r.get(k) is None else str(r.get(k)).strip()) for k in r.keys()}
+            # Inject normalized standard columns
+            concept_no = get_first_present_key(r, [
+                "Concept No.", "No.", "No", "S.No", "S. No.", "#", "ID"
+            ])
+            if concept_no == "":
+                concept_no = str(idx)
+            row_out["Concept No."] = int(str(concept_no).split()[0].strip(".:)")) if str(concept_no).split() else idx
+
+            row_out["Concept"] = get_first_present_key(r, [
+                "Concept", "Topic", "Outcome", "Learning Outcome", "Skill", "Criteria"
+            ])
+            row_out["Example"] = get_first_present_key(r, [
+                "Example", "Illustration", "Sample", "Formula", "Notes"
+            ])
+            # Keep Status blank unless present
+            row_out["Status"] = get_first_present_key(r, [
+                "Status", "Remark", "Notes/Status"
+            ], default="")
+            normalized_rows.append(row_out)
+
+        return normalized_rows
     except Exception:
         return []
+
+
+def _text_has_math_indicators(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = text.lower()
+    return any(tok in text for tok in ["∫", "√", "Σ", "Π", "^", "|", "→"]) or \
+        any(fn in lowered for fn in ["sin", "cos", "tan", "log", "ln", "lim", "dx", "dy/dx", "sec", "cosec", "cot"]) or \
+        ("/" in text and any(ch.isdigit() for ch in text))
+
+
+def refine_rubric_rows_with_cell_ocr(images: list, rows: list) -> list:
+    """Second pass: for each row, if the Example cell looks empty or too generic,
+    run a targeted OCR over the rubric images to locate and transcribe the Example cell
+    corresponding to that row. Updates rows in-place and returns them.
+    """
+    if not images or not rows:
+        return rows or []
+    try:
+        import base64
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Pre-encode images once
+        image_parts = []
+        for img in images:
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            image_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}})
+
+        for idx, row in enumerate(rows):
+            concept_no = row.get("Concept No.") or idx + 1
+            concept_name = str(row.get("Concept", "")).strip()
+            example_text = str(row.get("Example", "")).strip()
+
+            # Heuristic: refine if missing or no clear math indicators
+            if len(example_text) >= 10 and _text_has_math_indicators(example_text):
+                continue
+
+            instruction = (
+                "You are given images of a rubric table. Find the row that matches the given Concept number/name,\n"
+                "then transcribe EXACTLY the text from its 'Example' cell.\n\n"
+                f"Target row: Concept No. = {concept_no}; Concept/Title contains: '{concept_name[:120]}'\n\n"
+                "Rules:\n"
+                "- Output only the exact Example cell text for that row. No headings, no extra commentary.\n"
+                "- Preserve math faithfully: keep ∫, √, Σ, Π, |x|, d/dx, lim, etc.\n"
+                "- Convert LaTeX-like tokens to readable math: \\frac{dy}{dx} -> d/dx; \\sqrt{x} -> √x; x^{2} -> x^2; x_{0} -> x_0.\n"
+                "- If multiple short items exist (i), (ii), (iii), keep them as '(i) …; (ii) …; (iii) …' in one line.\n"
+                "- If unreadable, write [illegible]."
+            )
+
+            content = [{"type": "text", "text": instruction}] + image_parts
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": content}],
+                temperature=0.0,
+            )
+            extracted = (resp.choices[0].message.content or "").strip()
+            if extracted:
+                # Avoid model adding quotes or labels
+                cleaned = extracted.strip().strip('"')
+                rows[idx]["Example"] = cleaned
+
+        return rows
+    except Exception:
+        return rows
+
+
+def merge_rubric_rows_by_concept(base_rows: list, image_rows: list) -> list:
+    """Merge rows extracted from images into base rows (usually text-parsed).
+    Uses Concept No. primarily, then falls back to normalized Concept text.
+    Replaces Example/Status if provided by image rows; preserves extra columns.
+    """
+    if not base_rows:
+        return image_rows or []
+    if not image_rows:
+        return base_rows
+
+    def norm_name(v: str) -> str:
+        return re.sub(r"\s+", " ", (v or "").strip().lower())
+
+    # Build lookup from image rows
+    by_no = {int(r.get("Concept No.", 0)): r for r in image_rows if str(r.get("Concept No."))}
+    by_name = {norm_name(r.get("Concept", "")): r for r in image_rows}
+
+    merged: list = []
+    for r in base_rows:
+        out = dict(r)
+        candidate = by_no.get(int(r.get("Concept No.", 0))) or by_name.get(norm_name(r.get("Concept", "")))
+        if candidate:
+            # Replace Example/Status if present in image row
+            ex = str(candidate.get("Example", "")).strip()
+            if ex:
+                out["Example"] = ex
+            st_val = str(candidate.get("Status", "")).strip()
+            if st_val:
+                out["Status"] = st_val
+            # Preserve any extra columns from image row
+            for k, v in candidate.items():
+                if k not in out:
+                    out[k] = v
+        merged.append(out)
+    return merged
 
 def _status_to_score(status: str) -> int:
     mapping = {
@@ -1804,14 +2029,24 @@ if st.session_state.tests:
                     cached_rows_key = f"rubric_rows_{test['id']}"
                     rubric_rows = st.session_state.get(cached_rows_key)
                     if not rubric_rows:
-                        # Prefer image-based full extraction if we have rubric images
+                        # Text-only parse first (robust)
+                        rubric_rows_text = parse_rubric_text_llm(test.get('rubric', ''))
+                        rubric_rows_text = fill_missing_examples_from_text(rubric_rows_text, test.get('rubric', ''))
+
+                        # Also attempt image-based parse to capture formulas embedded as images
                         rub_imgs_key = f"rubric_images_{test['id']}"
                         available_imgs = st.session_state.get(rub_imgs_key, [])
-                        rubric_rows = extract_rubric_rows_from_images(available_imgs)
+                        rubric_rows_img = extract_rubric_rows_from_images(available_imgs) if available_imgs else []
+                        # Merge: prefer image Examples when available
+                        rubric_rows = merge_rubric_rows_by_concept(rubric_rows_text, rubric_rows_img)
                     if not rubric_rows:
                         rubric_rows = extract_rubric_table_from_text(test['rubric'])
                     st.session_state[cached_rows_key] = rubric_rows
                     if rubric_rows:
+                        # Debug: show scanning status for Examples
+                        empty_examples = sum(1 for r in rubric_rows if not str(r.get('Example', '')).strip())
+                        total_rows = len(rubric_rows)
+                        st.caption(f"Rubric rows loaded: {total_rows}. Empty Examples: {empty_examples}.")
                         st.markdown("**Rubric (editable)**")
                         # In-place editable table for the rubric
                         import pandas as pd
@@ -1829,6 +2064,15 @@ if st.session_state.tests:
                             },
                             key=editor_key,
                         )
+
+                        # Debug visibility: show extracted rubric data (no nested expander)
+                        cols_dbg = st.columns(3)
+                        if cols_dbg[0].button("Show parsed JSON", key=f"show_rubric_json_{test['id']}"):
+                            st.json(rubric_rows)
+                        if cols_dbg[1].button("Show raw rubric text", key=f"show_rubric_text_{test['id']}"):
+                            st.text_area("Raw Rubric Text", test.get('rubric',''), height=240, disabled=True, key=f"raw_rubric_text_{test['id']}")
+                        if cols_dbg[2].button("Copy JSON", key=f"copy_rubric_json_{test['id']}"):
+                            st.code(json.dumps(rubric_rows, ensure_ascii=False, indent=2))
 
                         cols = st.columns(3)
                         if cols[0].button("💾 Save Rubric", key=f"save_rubric_table_{test['id']}"):
