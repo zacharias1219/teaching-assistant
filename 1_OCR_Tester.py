@@ -22,10 +22,12 @@ except Exception:  # pragma: no cover - optional at runtime
 # Load environment variables from a local .env if present (development convenience)
 try:
     from dotenv import load_dotenv  # type: ignore
-    try:
-        load_dotenv()  # Loads from .env in CWD or parents
-    except Exception:
-        pass
+    # Only attempt in local/dev; on Streamlit Cloud, secrets should be used
+    if os.getenv("STREAMLIT_RUNTIME") != "cloud":
+        try:
+            load_dotenv()  # Loads from .env in CWD or parents
+        except Exception:
+            pass
 except Exception:
     load_dotenv = None
 
@@ -510,7 +512,11 @@ def segment_answers_auto(extractions: List[Dict[str, Any]]) -> Dict[int, str]:
 # --------------
 # UI
 # --------------
-st.set_page_config(page_title="OCR Tester", page_icon="🔍", layout="wide")
+try:
+    st.set_page_config(page_title="OCR Tester", page_icon="🔍", layout="wide")
+except Exception:
+    # In Streamlit Cloud multipage apps, set_page_config can only be called once
+    pass
 st.title("🔍 OCR Tester: Student Answers")
 st.caption("Upload PDFs or images of answer scripts, run OCR, and segment text by question numbers.")
 
@@ -615,7 +621,7 @@ if uploaded:
         # Display detected questions in order of keys; if 0 exists, treat as fallback "All Text"
         if 0 in segmented and len(segmented) == 1:
             # Only fallback text available
-            with st.container(border=True):
+            with st.container():
                 st.markdown("**All Text**")
                 st.text_area(
                     "Answer All Text",
@@ -632,7 +638,7 @@ if uploaded:
                 ordered_keys.append(0)
             for q_num in ordered_keys:
                 label = "All Text" if q_num == 0 else f"Question {q_num}"
-                with st.container(border=True):
+                with st.container():
                     st.markdown(f"**{label}**")
                     st.text_area(
                         f"Answer {label}",
